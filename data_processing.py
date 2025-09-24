@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from .utils import time_to_decimal_hours
+from utils import time_to_decimal_hours
 
 def load_and_clean(excel_file, remove_first=True):
     df = pd.read_excel(excel_file, sheet_name=0)
