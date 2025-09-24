@@ -1,1 +1,6 @@
-
+streamlit==1.25.0
+pandas>=1.5.0
+numpy
+scikit-learn~=1.3.0
+plotly
+xlsxwriter
