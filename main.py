@@ -1,35 +1,49 @@
 import streamlit as st
 import io
 import pandas as pd
-from processing import load_excel_first_sheet, build_final_dataset
+from processing import load_excel_first_sheet, build_final_dataset, validate_processed_dataset
 from analysis import first_n_cef_stats
 from viz import cef_figure, efficiencies_figure, capacities_figure
 
 st.set_page_config(page_title="Battery Health Prediction - CEF Analysis", page_icon="🔋", layout="wide")
 st.title("🔋 Battery Health Prediction - CEF Analysis")
-st.markdown("Upload your battery cycler data to calculate CEF (Capacity Estimation Filter) and extract health features")
+st.markdown("Upload raw cycler data for full processing or upload an already processed dataset to compute CEF statistics and plots")
 
-st.sidebar.header("Processing Options")
-remove_first_row = st.sidebar.checkbox("Remove First Row (Conditioning Cycle)", value=True,
-    help="Remove the first cycle which is typically a conditioning cycle with outlier values")
+st.sidebar.header("Mode")
+mode = st.sidebar.radio(
+    "Choose input type",
+    ("Raw cycler Excel", "Processed dataset"),
+    help="Raw cycler Excel runs full cleaning and feature engineering. Processed dataset skips to analysis if required columns exist."
+)
 
-uploaded_file = st.file_uploader("Upload Excel File", type=['xlsx', 'xls'])
+remove_first_row = st.sidebar.checkbox(
+    "Remove First Row (Conditioning Cycle)", value=True,
+    help="Applies only to raw cycler Excel processing"
+)
+
+if mode == "Raw cycler Excel":
+    uploaded_file = st.file_uploader("Upload raw cycler Excel", type=['xlsx', 'xls'])
+else:
+    uploaded_file = st.file_uploader("Upload processed dataset (CSV or Excel)", type=['csv', 'xlsx', 'xls'])
 
 if uploaded_file is not None:
     try:
-        sheet_name, df_raw = load_excel_first_sheet(uploaded_file)
-        st.success(f"File uploaded successfully! Sheet: {sheet_name}")
+        if mode == "Raw cycler Excel":
+            sheet_name, df_raw = load_excel_first_sheet(uploaded_file)
+            st.success(f"File uploaded successfully! Sheet: {sheet_name}")
+            st.subheader("📊 Original Data Preview")
+            st.write(f"Dataset shape: {df_raw.shape}")
+            st.dataframe(df_raw.head())
+            with st.spinner("Processing raw data..."):
+                final_dataset = build_final_dataset(df_raw, remove_first_row)
+        else:
+            st.info("Expecting columns like Cycle_Number, Charge/Discharge Capacity/Energy, CE/EE, and/or CEF. Missing derivable columns will be recomputed if possible.")
+            final_dataset, notes = validate_processed_dataset(uploaded_file)
+            if notes:
+                st.warning("Notes: " + " | ".join(notes))
+            st.success("Processed dataset loaded.")
 
-        st.subheader("📊 Original Data Preview")
-        st.write(f"Dataset shape: {df_raw.shape}")
-        st.dataframe(df_raw.head())
-
-        with st.spinner("Processing data..."):
-            final_dataset = build_final_dataset(df_raw, remove_first_row)
-
-        st.success("✅ Data processing completed!")
-
-        st.subheader("🔧 Processed Data")
+        st.subheader("🔧 Data Preview For Analysis")
         st.write(f"Final dataset shape: {final_dataset.shape}")
         st.dataframe(final_dataset.head(10))
 
@@ -85,20 +99,7 @@ if uploaded_file is not None:
                 file_name="processed_battery_data.csv",
                 mime="text/csv"
             )
-
     except Exception as e:
-        st.error(f"Error processing file: {str(e)}")
-        st.write("Please ensure your Excel file has the correct format with columns: Time, Date, Voltage (mV), Current (mA), Capacity (mAh), Energy (mWh)")
+        st.error(f"Error: {str(e)}")
 else:
-    st.info("👆 Please upload an Excel file to begin analysis")
-    st.subheader("📋 Required Data Format")
-    sample_data = pd.DataFrame({
-        'Sr. No.': [1, 2, 3, 4, 5],
-        'Time': ['00:00:00.000', '00:00:30.000', '00:01:00.000', '00:01:30.000', '00:02:00.000'],
-        'Date': ['2024-04-16 11:48:51.047'] * 5,
-        'Voltage (mV)': [3708.14, 3723.11, 3730.12, 3735.12, 3740.11],
-        'Current (mA)': [1274.12, 1274.11, 1274.12, 1274.11, 1274.11],
-        'Capacity (mAh)': [0.18, 10.79, 21.41, 32.03, 42.64],
-        'Energy (mWh)': [0.66, 40.12, 79.68, 119.30, 158.98]
-    })
-    st.dataframe(sample_data)
+    st.info("👆 Upload a file to begin analysis")
