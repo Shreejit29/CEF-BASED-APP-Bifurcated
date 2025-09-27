@@ -31,12 +31,38 @@ def load_excel_features(file_like_or_path, sheet=0):
     df["label"] = df["label"].astype(int)
     return df
 def train_from_dataframe(df, random_state=42):
+    import numpy as np
+    from collections import defaultdict
+    from sklearn.model_selection import GroupKFold, GridSearchCV, cross_val_score
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from sklearn.metrics import classification_report, confusion_matrix
+
     X = df[["cef_slope","cef_range","cef_std","cef_var"]].values
-    y = df["label"].values
+    y = df["label"].values.astype(int)
     groups_all = df["cell_id"].values
 
-    gss = GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=random_state)
-    train_idx, test_idx = next(gss.split(X, y, groups_all))
+    # Group-stratified split to avoid single-class test sets
+    def group_stratified_split(labels, groups, test_size=0.25, random_state=42):
+        rng = np.random.RandomState(random_state)
+        group_to_label = {}
+        for g, yy in zip(groups, labels):
+            group_to_label[g] = int(yy)
+        # split groups by label
+        by_label = defaultdict(list)
+        for g, lbl in group_to_label.items():
+            by_label[lbl].append(g)
+        train_groups, test_groups = [], []
+        for lbl, glist in by_label.items():
+            glist = np.array(glist)
+            rng.shuffle(glist)
+            n_test = max(1, int(round(test_size * len(glist))))
+            test_groups.extend(glist[:n_test])
+            train_groups.extend(glist[n_test:])
+        train_mask = np.isin(groups, train_groups)
+        test_mask = np.isin(groups, test_groups)
+        return np.where(train_mask)[0], np.where(test_mask)[0]
+
+    train_idx, test_idx = group_stratified_split(y, groups_all, test_size=0.25, random_state=random_state)
     X_train, X_test = X[train_idx], X[test_idx]
     y_train, y_test = y[train_idx], y[test_idx]
     groups_train = groups_all[train_idx]
@@ -49,11 +75,7 @@ def train_from_dataframe(df, random_state=42):
     }
 
     gkf = GroupKFold(n_splits=5)
-    cv_iter = list(gkf.split(X_train, y_train, groups=groups_train))  # force materialization
-
-    # Debug guard
-    if not cv_iter or not isinstance(cv_iter[0], tuple):
-        raise RuntimeError("CV iterator malformed")
+    cv_iter = list(gkf.split(X_train, y_train, groups=groups_train))
 
     gs = GridSearchCV(
         estimator=clf,
@@ -65,13 +87,30 @@ def train_from_dataframe(df, random_state=42):
     gs.fit(X_train, y_train)
     best = gs.best_estimator_
 
+    # Evaluation (robust to single-class test)
     y_pred = best.predict(X_test)
-    y_proba = getattr(best, "predict_proba", None)
-    auc = roc_auc_score(y_test, y_proba[:,1]) if y_proba is not None else None
-    report = classification_report(y_test, y_pred, digits=4)
-    cm = confusion_matrix(y_test, y_pred)
+    # predict_proba safe call
+    proba_method = getattr(best, "predict_proba", None)
+    y_proba_scores = None
+    if callable(proba_method):
+        y_proba = proba_method(X_test)
+        if isinstance(y_proba, np.ndarray) and y_proba.ndim == 2 and y_proba.shape[1] >= 2:
+            y_proba_scores = y_proba[:, 1]
+        elif isinstance(y_proba, np.ndarray) and y_proba.ndim == 1:
+            y_proba_scores = y_proba
 
-    cv_iter_full = list(gkf.split(X_train, y_train, groups=groups_train))  # materialize again
+    # Safe report: zero_division=0
+    report = classification_report(y_test, y_pred, digits=4, zero_division=0)
+    cm = confusion_matrix(y_test, y_pred).tolist()
+
+    # AUC only if both classes present
+    auc = None
+    if y_proba_scores is not None and len(np.unique(y_test)) == 2:
+        from sklearn.metrics import roc_auc_score
+        auc = float(roc_auc_score(y_test, y_proba_scores))
+
+    # CV scores on train
+    cv_iter_full = list(gkf.split(X_train, y_train, groups=groups_train))
     cv_scores = cross_val_score(best, X_train, y_train, scoring="f1", cv=cv_iter_full, n_jobs=-1)
 
     return {
@@ -79,8 +118,8 @@ def train_from_dataframe(df, random_state=42):
         "cv_f1_mean": float(cv_scores.mean()),
         "cv_f1_std": float(cv_scores.std()),
         "test_report": report,
-        "test_confusion_matrix": cm.tolist(),
-        "test_auc": float(auc) if auc is not None else None,
+        "test_confusion_matrix": cm,
+        "test_auc": auc,
         "model": best
     }
 
