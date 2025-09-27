@@ -5,7 +5,7 @@ from utils import safe_stats
 
 # Accept common aliases for robustness
 CEF_ALIASES = ["CEF", "cef", "cef_value", "CEF value"]
-CYCLE_ALIASES = ["Cycle_Number", "Cycle", "Cycle No", "cycle number", "Index", "Sr. No."]
+CYCLE_ALIASES = ["Cycle_Number", "Cycle", "Cycle No", "cycle number", "Cycle_Index", "Cycle_index", "Cycle Index"]
 
 def _first_existing(df: pd.DataFrame, names):
     for n in names:
