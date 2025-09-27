@@ -49,7 +49,11 @@ def train_from_dataframe(df, random_state=42):
     }
 
     gkf = GroupKFold(n_splits=5)
-    cv_iter = gkf.split(X_train, y_train, groups=groups_train)
+    cv_iter = list(gkf.split(X_train, y_train, groups=groups_train))  # force materialization
+
+    # Debug guard
+    if not cv_iter or not isinstance(cv_iter[0], tuple):
+        raise RuntimeError("CV iterator malformed")
 
     gs = GridSearchCV(
         estimator=clf,
@@ -67,8 +71,7 @@ def train_from_dataframe(df, random_state=42):
     report = classification_report(y_test, y_pred, digits=4)
     cm = confusion_matrix(y_test, y_pred)
 
-    # New iterator (cv_iter is exhausted by GridSearchCV)
-    cv_iter_full = gkf.split(X_train, y_train, groups=groups_train)
+    cv_iter_full = list(gkf.split(X_train, y_train, groups=groups_train))  # materialize again
     cv_scores = cross_val_score(best, X_train, y_train, scoring="f1", cv=cv_iter_full, n_jobs=-1)
 
     return {
