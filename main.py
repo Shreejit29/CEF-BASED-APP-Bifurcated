@@ -253,9 +253,11 @@ with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False)
     excel_file = st.file_uploader("Upload labeled Excel", type=["xlsx","xls"], key="train_xlsx")
     if excel_file is not None:
         try:
+            # sheet as integer index 0, not sheet_name[0]
             df_train = load_excel_features(excel_file, sheet=0)
             st.write(f"Rows loaded: {len(df_train)}")
-            st.dataframe(df_train.head())
+            st.dataframe(df_train.head())  # head() not head[]
+
             if st.button("Train model", type="primary"):
                 with st.spinner("Training with grouped CV…"):
                     res = train_from_dataframe(df_train, random_state=42)
@@ -266,14 +268,9 @@ with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False)
                 st.write("Test AUC:", res["test_auc"])
                 st.write("Confusion matrix:", res["test_confusion_matrix"])
 
-                # Save and activate model
                 os.makedirs("models", exist_ok=True)
                 save_path = save_model(res["model"], path="models/cef_gb_model.joblib")
                 st.success(f"Model saved to {save_path} and will auto-load next time.")
-                try:
-                    model = res["model"]
-                    st.info("Model is now active for predictions above.")
-                except Exception:
-                    pass
+                model = res["model"]  # activate immediately
         except Exception as e:
             st.error(f"Training error: {e}")
