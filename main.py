@@ -9,6 +9,8 @@ from processing import (
 from analysis import first_n_cef_stats
 from viz import cef_figure, efficiencies_figure, capacities_figure
 from utils import canonicalize_columns
+import joblib, os
+from train_cef_model import load_excel_features, train_from_dataframe, save_model
 
 st.set_page_config(page_title="Battery Health Prediction - CEF Analysis", page_icon="🔋", layout="wide")
 st.title("🔋 Battery Health Prediction - CEF Analysis")
