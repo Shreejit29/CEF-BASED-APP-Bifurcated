@@ -27,6 +27,22 @@ remove_first_row = st.sidebar.checkbox(
     "Remove First Row (Conditioning Cycle)", value=True,
     help="Applies only to raw cycler Excel processing"
 )
+MODEL_PATH_DEFAULT = "models/cef_gb_model.joblib"
+model = None
+if os.path.exists(MODEL_PATH_DEFAULT):
+    try:
+        model = joblib.load(MODEL_PATH_DEFAULT)
+        st.sidebar.success("Loaded saved model.")
+    except Exception:
+        st.sidebar.warning("Found saved model but failed to load.")
+
+uploaded_model = st.sidebar.file_uploader("Upload trained model (.joblib)", type=["joblib"])
+if uploaded_model is not None:
+    try:
+        model = joblib.load(uploaded_model)
+        st.sidebar.success("Model loaded from upload.")
+    except Exception as e:
+        st.sidebar.error(f"Load failed: {e}")
 
 def compute_derivables(df: pd.DataFrame):
     if "Coulombic_Efficiency" not in df.columns and {"Discharge_Capacity","Charge_Capacity"}.issubset(df.columns):
