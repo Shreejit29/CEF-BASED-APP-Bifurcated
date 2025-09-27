@@ -8,20 +8,20 @@ REQUIRED_COLS = ['Sr. No.', 'Time', 'Date', 'Voltage (mV)', 'Current (mA)', 'Cap
 
 # Flexible alias map so differently labeled inputs are auto-canonicalized
 ALIAS_MAP = {
-    "Cycle_Number": ["Cycle", "Cycle No", "cycle number", "Sr. No.", "SrNo", "Index"],
+    "Cycle_Number": ["Cycle_Number", "Cycle", "Cycle No", "cycle number", "Cycle_Index", "Cycle_index", "Cycle Index"],
     "Time": ["Time", "time stamp", "t", "Duration"],
     "Date": ["Date", "Datetime", "Timestamp", "date time"],
-    "Voltage (mV)": ["Voltage (mV)", "Voltage_mV", "VmV", "Voltage"],
-    "Current (mA)": ["Current (mA)", "Current_mA", "ImA", "Current"],
-    "Capacity (mAh)": ["Capacity (mAh)", "Capacity_mAh", "QmAh", "Charge Capacity", "Cap (mAh)"],
-    "Energy (mWh)": ["Energy (mWh)", "Energy_mWh", "EmWh", "Energy"],
+    "Voltage (mV)": ["Voltage (mV)", "Voltage_mV", "VmV", "Voltage", "Voltage (V)"],
+    "Current (mA)": ["Current (mA)", "Current_mA", "ImA", "Current", "Current (A)"],
+    "Capacity (mAh)": ["Capacity (mAh)", "Capacity_mAh", "QmAh", "Capacity", "Cap (mAh)", "Capacity (Ah)", "Capacity(Ah)"],
+    "Energy (mWh)": ["Energy (mWh)", "Energy_mWh", "EmWh", "Energy", "Energy (Wh)", "Energy(Wh)"],
     "Charge_Capacity": ["Charge Capacity", "Qchg", "Q_charge", "Qcharge"],
     "Discharge_Capacity": ["Discharge Capacity", "Qdchg", "Q_discharge", "Qdischarge"],
     "Charge_Energy": ["Charge Energy", "Echg", "E_charge", "Echarge"],
     "Discharge_Energy": ["Discharge Energy", "Edchg", "E_discharge", "Edischarge"],
     "Coulombic_Efficiency": ["Coulombic efficiency","Coulombic Efficiency","CE","CoulombicEff","Coulombic_Eff","C Eff"],
     "Energy_Efficiency": ["Energy efficiency","Energy Efficiency","EE","EnergyEff","Energy_Eff"],
-    "CEF": ["Capacity Estimation Filter","cef","CEF value","cef_value"]
+    "CEF": ["CEF","cef","CEF value","cef_value"]
 }
 
 def load_excel_first_sheet(uploaded_file):
