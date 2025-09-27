@@ -2,9 +2,13 @@ import streamlit as st
 import io
 import pandas as pd
 import numpy as np
-from processing import load_excel_first_sheet, build_final_dataset, validate_processed_dataset, _read_any
+from processing import (
+    load_excel_first_sheet, build_final_dataset, validate_processed_dataset,
+    _read_any, validate_processed_dataframe, ALIAS_MAP
+)
 from analysis import first_n_cef_stats
 from viz import cef_figure, efficiencies_figure, capacities_figure
+from utils import canonicalize_columns
 
 st.set_page_config(page_title="Battery Health Prediction - CEF Analysis", page_icon="🔋", layout="wide")
 st.title("🔋 Battery Health Prediction - CEF Analysis")
@@ -56,8 +60,8 @@ if uploaded_file is not None:
             st.write(f"Dataset shape: {df_raw.shape}")
             st.dataframe(df_raw.head())
 
-            with st.expander("🧪 Data Preparation (edit, rename, map, and clean)", expanded=True):
-                st.caption("Edit cells, rename columns, add or delete rows before processing.")
+            with st.expander("🧪 Data Preparation (edit, rename, auto-map, and clean)", expanded=True):
+                st.caption("Edit cells, rename columns, and let the app recognize common aliases before processing.")
                 editable = st.data_editor(df_raw, num_rows="dynamic", use_container_width=True)
 
                 # Rename Columns
@@ -67,14 +71,23 @@ if uploaded_file is not None:
                     new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_raw_{col}")
                     if new and new != col:
                         rename_map[col] = new
-                df_for_next = df_for_next.rename(columns=rename_map)
-                st.write("Preview after renaming:")
+                if rename_map:
+                    df_for_next = df_for_next.rename(columns=rename_map)
+
+                # Auto-canonicalize common aliases to canonical names
+                df_for_next, canon_notes = canonicalize_columns(df_for_next, ALIAS_MAP)
+                if canon_notes:
+                    st.info(" | ".join(canon_notes))
+
+                st.write("Preview after renaming & canonicalization:")
                 st.dataframe(df_for_next.head())
 
-                # Mapping & processing
-                can_process = all(k in df_for_next.columns for k in ["Time","Date","Current (mA)","Capacity (mAh)","Energy (mWh)"])
+                # Processing
+                required = ["Time","Date","Current (mA)","Capacity (mAh)","Energy (mWh)"]
+                can_process = all(k in df_for_next.columns for k in required)
                 if not can_process:
-                    st.error("Ensure columns: Time, Date, Current (mA), Capacity (mAh), Energy (mWh).")
+                    missing = [k for k in required if k not in df_for_next.columns]
+                    st.error(f"Missing required columns for raw processing: {missing}")
                 else:
                     with st.spinner("Processing raw data..."):
                         final_dataset = build_final_dataset(df_for_next, remove_first_row)
@@ -83,7 +96,7 @@ if uploaded_file is not None:
             df_loaded, fmt = _read_any(uploaded_file)
             st.success(f"Processed dataset loaded ({fmt}).")
 
-            with st.expander("🧪 Data Preparation (edit, rename, compute missing fields)", expanded=True):
+            with st.expander("🧪 Data Preparation (edit, rename, auto-map, compute missing fields)", expanded=True):
                 editable = st.data_editor(df_loaded, num_rows="dynamic", use_container_width=True)
 
                 # Rename Columns
@@ -93,20 +106,21 @@ if uploaded_file is not None:
                     new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_proc_{col}")
                     if new and new != col:
                         rename_map[col] = new
-                df_for_next = df_for_next.rename(columns=rename_map)
-                st.write("Preview after renaming:")
-                st.dataframe(df_for_next.head())
+                if rename_map:
+                    df_for_next = df_for_next.rename(columns=rename_map)
 
-                # Compute derivable fields and validate
+                # Auto-canonicalize aliases
+                df_for_next, canon_notes = canonicalize_columns(df_for_next, ALIAS_MAP)
+                if canon_notes:
+                    st.info(" | ".join(canon_notes))
+
+                # Compute derivable fields and validate the DataFrame directly
                 df_ready = compute_derivables(df_for_next)
                 try:
-                    final_dataset, notes = validate_processed_dataset(
-                        io.BytesIO(df_for_next.to_csv(index=False).encode())
-                        if fmt == "csv" else uploaded_file
-                    )
-                except Exception:
+                    final_dataset, notes = validate_processed_dataframe(df_ready)
+                except Exception as e:
                     final_dataset = df_ready
-                    notes = ["Used edited data with computed fields (best-effort)."]
+                    notes = [f"Validation fallback: {e}"]
                 if notes:
                     st.warning("Notes: " + " | ".join(notes))
 
