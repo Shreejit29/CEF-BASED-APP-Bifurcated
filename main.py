@@ -245,84 +245,28 @@ if uploaded_file is not None:
         st.error(f"Error: {str(e)}")
 else:
     st.info("👆 Upload a file to begin analysis")
-st.subheader("🧠 Train classifier (Excel)")
 with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False):
     st.caption("Excel must have: cell_id, cef_slope, cef_range, cef_std, optional cef_var, label (0=Healthy, 1=Degraded).")
     excel_file = st.file_uploader("Upload labeled Excel", type=["xlsx","xls"], key="train_xlsx")
     if excel_file is not None:
         try:
-            st.text("Step 1: Loading Excel...")
             df_train = load_excel_features(excel_file, sheet=0)
-            st.text(f"Loaded rows: {len(df_train)}")
-            st.dataframe(df_train.head())  # head() call with parentheses
+            st.write(f"Rows loaded: {len(df_train)}")
+            st.dataframe(df_train.head())
 
             if st.button("Train model", type="primary"):
                 with st.spinner("Training with grouped CV…"):
-                    # Inline, explicit code to avoid any hidden subscript of methods
-                    from sklearn.model_selection import GroupShuffleSplit, GroupKFold, GridSearchCV, cross_val_score
-                    from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
-                    from sklearn.ensemble import HistGradientBoostingClassifier
-
-                    st.text("Step 2: Building matrices...")
-                    X = df_train[["cef_slope","cef_range","cef_std","cef_var"]].values
-                    y = df_train["label"].values
-                    groups_all = df_train["cell_id"].values
-
-                    st.text("Step 3: GroupShuffleSplit...")
-                    gss = GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=42)
-                    train_idx, test_idx = next(gss.split(X, y, groups_all))
-
-                    X_train, X_test = X[train_idx], X[test_idx]
-                    y_train, y_test = y[train_idx], y[test_idx]
-                    groups_train = groups_all[train_idx]
-                    st.text(f"Train size: {len(train_idx)}, Test size: {len(test_idx)}")
-
-                    st.text("Step 4: Prepare CV folds...")
-                    gkf = GroupKFold(n_splits=5)
-                    cv_iter = list(gkf.split(X_train, y_train, groups=groups_train))
-                    st.text(f"CV folds: {len(cv_iter)}")
-
-                    st.text("Step 5: GridSearchCV...")
-                    clf = HistGradientBoostingClassifier(random_state=42)
-                    param_grid = {
-                        "learning_rate": [0.05, 0.1, 0.2],
-                        "max_depth": [None, 3, 5],
-                        "max_iter": [100, 200, 400]
-                    }
-                    gs = GridSearchCV(
-                        estimator=clf,
-                        param_grid=param_grid,
-                        scoring="f1",
-                        cv=cv_iter,
-                        n_jobs=-1
-                    )
-                    gs.fit(X_train, y_train)
-                    best = gs.best_estimator_
-                    st.text("Step 6: Fitted GridSearchCV")
-
-                    st.text("Step 7: Evaluate on test...")
-                    y_pred = best.predict(X_test)
-                    y_proba = getattr(best, "predict_proba", None)
-                    auc = roc_auc_score(y_test, y_proba[:,1]) if y_proba is not None else None
-                    from sklearn.metrics import classification_report, confusion_matrix
-                    report = classification_report(y_test, y_pred, digits=4)
-                    cm = confusion_matrix(y_test, y_pred)
-
-                    st.text("Step 8: Cross-val on train...")
-                    cv_iter_full = list(gkf.split(X_train, y_train, groups=groups_train))
-                    from sklearn.model_selection import cross_val_score
-                    cv_scores = cross_val_score(best, X_train, y_train, scoring="f1", cv=cv_iter_full, n_jobs=-1)
-
+                    res = train_from_dataframe(df_train, random_state=42)
                 st.success("Training complete")
-                st.write("Best params:", gs.best_params_)
-                st.write("CV F1 mean/std:", float(cv_scores.mean()), float(cv_scores.std()))
-                st.text("Test report:\n" + report)
-                st.write("Test AUC:", float(auc) if auc is not None else None)
-                st.write("Confusion matrix:", cm.tolist())
+                st.write("Best params:", res["best_params"])
+                st.write("CV F1 mean/std:", res["cv_f1_mean"], res["cv_f1_std"])
+                st.text("Test report:\n" + res["test_report"])
+                st.write("Test AUC:", res["test_auc"])
+                st.write("Confusion matrix:", res["test_confusion_matrix"])
 
                 os.makedirs("models", exist_ok=True)
-                save_path = save_model(best, path="models/cef_gb_model.joblib")
+                save_path = save_model(res["model"], path="models/cef_gb_model.joblib")
                 st.success(f"Model saved to {save_path} and will auto-load next time.")
-                model = best  # activate immediately
+                model = res["model"]
         except Exception as e:
             st.error(f"Training error: {e}")
