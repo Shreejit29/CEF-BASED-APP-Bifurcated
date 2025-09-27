@@ -3,7 +3,7 @@ import io
 import pandas as pd
 import numpy as np
 from processing import (
-    load_excel_first_sheet, build_final_dataset, validate_processed_dataset,
+    load_excel_first_sheet, build_final_dataset,
     _read_any, validate_processed_dataframe, ALIAS_MAP
 )
 from analysis import first_n_cef_stats
@@ -130,6 +130,11 @@ if uploaded_file is not None:
             st.subheader("🔧 Data Preview For Analysis")
             st.write(f"Final dataset shape: {final_dataset.shape}")
             st.dataframe(final_dataset.head(10))
+
+            # Quick hint for efficiencies visibility
+            missing_eff = [c for c in ["Coulombic_Efficiency","Energy_Efficiency"] if c not in final_dataset.columns]
+            if missing_eff:
+                st.info(f"Efficiency columns missing: {missing_eff}. They are computed when capacity/energy pairs are present.")
 
             st.subheader("📈 CEF Analysis - First 10 Cycles")
             stats = first_n_cef_stats(final_dataset, first_n=10)
