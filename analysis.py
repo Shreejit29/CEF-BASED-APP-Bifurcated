@@ -14,7 +14,7 @@ def _first_existing(df: pd.DataFrame, names):
     return None
 
 def first_n_cef_stats(final_dataset: pd.DataFrame, first_n=10):
-    # Choose columns flexibly
+    # Flexible column resolution
     cef_col = _first_existing(final_dataset, CEF_ALIASES)
     cyc_col = _first_existing(final_dataset, CYCLE_ALIASES)
 
@@ -31,20 +31,30 @@ def first_n_cef_stats(final_dataset: pd.DataFrame, first_n=10):
     if len(first) == 0 or cef_col is None or cyc_col is None:
         return result
 
-    # Drop rows with NaN CEF or Cycle
-    first = first[[cyc_col, cef_col]].dropna()
-    if len(first) == 0:
+    # Collect optional plotting columns if present
+    opt_cols = []
+    for c in ["Coulombic_Efficiency", "Energy_Efficiency", "Charge_Capacity", "Discharge_Capacity"]:
+        if c in first.columns:
+            opt_cols.append(c)
+
+    # Drop rows missing essential fields for CEF trend
+    core = first[[cyc_col, cef_col]].dropna()
+    if len(core) == 0:
+        # Still return the optional columns for plots if any
+        out = first.rename(columns={cyc_col: "Cycle_Number", cef_col: "CEF"}) if cef_col in first.columns and cyc_col in first.columns else first
+        keep_cols = ["Cycle_Number", "CEF"] + [c for c in opt_cols if c in out.columns]
+        result["first_n_df"] = out[keep_cols] if set(keep_cols).issubset(out.columns) else out
         return result
 
-    y = first[cef_col].to_numpy(dtype=float)
-    x_vals = first[cyc_col].to_numpy(dtype=float)
+    y = core[cef_col].to_numpy(dtype=float)
+    x_vals = core[cyc_col].to_numpy(dtype=float)
     x = x_vals.reshape(-1, 1)
 
-    # Stats with safety
+    # Stats
     s = safe_stats(y)
     result.update(s)
 
-    # Only fit when at least 2 distinct x and 2 samples
+    # Linear trend if possible
     if len(y) >= 2 and np.unique(x_vals).size >= 2:
         model = LinearRegression()
         model.fit(x, y)
@@ -54,7 +64,18 @@ def first_n_cef_stats(final_dataset: pd.DataFrame, first_n=10):
         result["slope"] = None
         result["trend_y"] = None
 
-    # Return the same columns as upstream expects for plotting (rename to canonical for convenience)
-    out = first.rename(columns={cyc_col: "Cycle_Number", cef_col: "CEF"})
-    result["first_n_df"] = out
+    # Build output for plotting: include optional efficiency/capacity columns if present
+    # Merge back optional columns aligned on cycle index
+    merged = core.copy()
+    # Bring optional columns from 'first' where available for the same rows
+    if opt_cols:
+        merged = merged.merge(
+            first[[cyc_col] + opt_cols],
+            on=cyc_col, how="left", suffixes=("", "")
+        )
+
+    out = merged.rename(columns={cyc_col: "Cycle_Number", cef_col: "CEF"})
+    keep_cols = ["Cycle_Number", "CEF"] + [c for c in ["Coulombic_Efficiency", "Energy_Efficiency", "Charge_Capacity", "Discharge_Capacity"] if c in out.columns]
+    result["first_n_df"] = out[keep_cols]
+
     return result
