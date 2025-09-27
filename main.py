@@ -27,6 +27,8 @@ remove_first_row = st.sidebar.checkbox(
     "Remove First Row (Conditioning Cycle)", value=True,
     help="Applies only to raw cycler Excel processing"
 )
+
+# -------- Persistent model load / upload --------
 MODEL_PATH_DEFAULT = "models/cef_gb_model.joblib"
 model = None
 if os.path.exists(MODEL_PATH_DEFAULT):
@@ -61,6 +63,15 @@ def compute_derivables(df: pd.DataFrame):
         df = df.reset_index(drop=True)
         df.insert(0, "Cycle_Number", range(1, len(df)+1))
     return df
+
+def _features_from_stats(stats):
+    slope = stats.get("slope")
+    rng = stats.get("range")
+    std = stats.get("std")
+    var = (std ** 2) if std is not None else None
+    if None in (slope, rng, std, var):
+        return None
+    return np.array([[slope, rng, std, var]], dtype=float)
 
 uploaded_file = st.file_uploader(
     "Upload file",
@@ -183,6 +194,31 @@ if uploaded_file is not None:
             with c2:
                 st.plotly_chart(capacities_figure(stats), use_container_width=True)
 
+            # --------- Inference using persistent model ---------
+            st.subheader("🧪 Condition prediction")
+            if model is None:
+                st.info("Load or train a model to enable predictions.")
+            else:
+                feats = _features_from_stats(stats)
+                if feats is None:
+                    st.info("Not enough data to form features for inference (need slope, range, std).")
+                else:
+                    try:
+                        proba = getattr(model, "predict_proba", None)
+                        if proba is not None:
+                            p = proba(feats)[0,1]
+                            pred = int(p >= 0.5)
+                        else:
+                            pred = int(model.predict(feats)[0])
+                            p = None
+                        label = "Degraded" if pred == 1 else "Healthy"
+                        if p is not None:
+                            st.metric("Predicted condition", f"{label}", f"Degraded prob: {p:.2%}")
+                        else:
+                            st.metric("Predicted condition", f"{label}")
+                    except Exception as e:
+                        st.warning(f"Inference error: {e}")
+
             st.subheader("💾 Download Results")
             statistics_df = pd.DataFrame({
                 'Parameter': ['CEF Slope (Linear Regression)', 'CEF Range', 'CEF Standard Deviation', 'CEF Variance'],
@@ -209,3 +245,35 @@ if uploaded_file is not None:
         st.error(f"Error: {str(e)}")
 else:
     st.info("👆 Upload a file to begin analysis")
+
+# --------- Train classifier (Excel) ---------
+st.subheader("🧠 Train classifier (Excel)")
+with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False):
+    st.caption("Excel must have: cell_id, cef_slope, cef_range, cef_std, optional cef_var, label (0=Healthy, 1=Degraded).")
+    excel_file = st.file_uploader("Upload labeled Excel", type=["xlsx","xls"], key="train_xlsx")
+    if excel_file is not None:
+        try:
+            df_train = load_excel_features(excel_file, sheet=0)
+            st.write(f"Rows loaded: {len(df_train)}")
+            st.dataframe(df_train.head())
+            if st.button("Train model", type="primary"):
+                with st.spinner("Training with grouped CV…"):
+                    res = train_from_dataframe(df_train, random_state=42)
+                st.success("Training complete")
+                st.write("Best params:", res["best_params"])
+                st.write("CV F1 mean/std:", res["cv_f1_mean"], res["cv_f1_std"])
+                st.text("Test report:\n" + res["test_report"])
+                st.write("Test AUC:", res["test_auc"])
+                st.write("Confusion matrix:", res["test_confusion_matrix"])
+
+                # Save and activate model
+                os.makedirs("models", exist_ok=True)
+                save_path = save_model(res["model"], path="models/cef_gb_model.joblib")
+                st.success(f"Model saved to {save_path} and will auto-load next time.")
+                try:
+                    model = res["model"]
+                    st.info("Model is now active for predictions above.")
+                except Exception:
+                    pass
+        except Exception as e:
+            st.error(f"Training error: {e}")
