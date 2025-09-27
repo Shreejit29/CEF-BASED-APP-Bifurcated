@@ -25,20 +25,7 @@ remove_first_row = st.sidebar.checkbox(
     "Remove First Row (Conditioning Cycle)", value=True,
     help="Applies only to raw cycler Excel processing"
 )
-# Ensure derivables exist in the final dataset (in case processed input skipped raw pipeline)
-def _ensure_derivables(df):
-    d = df.copy()
-    if "Coulombic_Efficiency" not in d.columns and {"Discharge_Capacity","Charge_Capacity"}.issubset(d.columns):
-        with np.errstate(divide='ignore', invalid='ignore'):
-            d["Coulombic_Efficiency"] = np.where(d["Charge_Capacity"]>0,
-                                                 d["Discharge_Capacity"]/d["Charge_Capacity"], np.nan)
-    if "Energy_Efficiency" not in d.columns and {"Discharge_Energy","Charge_Energy"}.issubset(d.columns):
-        with np.errstate(divide='ignore', invalid='ignore'):
-            d["Energy_Efficiency"] = np.where(d["Charge_Energy"]>0,
-                                              d["Discharge_Energy"]/d["Charge_Energy"], np.nan)
-    return d
 
-final_dataset = _ensure_derivables(final_dataset)
 def compute_derivables(df: pd.DataFrame):
     if "Coulombic_Efficiency" not in df.columns and {"Discharge_Capacity","Charge_Capacity"}.issubset(df.columns):
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -56,6 +43,18 @@ def compute_derivables(df: pd.DataFrame):
         df = df.reset_index(drop=True)
         df.insert(0, "Cycle_Number", range(1, len(df)+1))
     return df
+
+def _ensure_derivables(df: pd.DataFrame):
+    d = df.copy()
+    if "Coulombic_Efficiency" not in d.columns and {"Discharge_Capacity","Charge_Capacity"}.issubset(d.columns):
+        with np.errstate(divide='ignore', invalid='ignore'):
+            d["Coulombic_Efficiency"] = np.where(d["Charge_Capacity"]>0,
+                                                 d["Discharge_Capacity"]/d["Charge_Capacity"], np.nan)
+    if "Energy_Efficiency" not in d.columns and {"Discharge_Energy","Charge_Energy"}.issubset(d.columns):
+        with np.errstate(divide='ignore', invalid='ignore'):
+            d["Energy_Efficiency"] = np.where(d["Charge_Energy"]>0,
+                                              d["Discharge_Energy"]/d["Charge_Energy"], np.nan)
+    return d
 
 uploaded_file = st.file_uploader(
     "Upload file",
@@ -143,6 +142,9 @@ if uploaded_file is not None:
             st.subheader("🔧 Data Preview For Analysis")
             st.write(f"Final dataset shape: {final_dataset.shape}")
             st.dataframe(final_dataset.head(10))
+
+            # Ensure CE/EE exist if derivable (for charts)
+            final_dataset = _ensure_derivables(final_dataset)
 
             # Quick hint for efficiencies visibility
             missing_eff = [c for c in ["Coulombic_Efficiency","Energy_Efficiency"] if c not in final_dataset.columns]
