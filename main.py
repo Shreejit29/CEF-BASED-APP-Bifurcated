@@ -25,10 +25,12 @@ remove_first_row = st.sidebar.checkbox(
 def compute_derivables(df: pd.DataFrame):
     if "Coulombic_Efficiency" not in df.columns and {"Discharge_Capacity","Charge_Capacity"}.issubset(df.columns):
         with np.errstate(divide='ignore', invalid='ignore'):
-            df["Coulombic_Efficiency"] = np.where(df["Charge_Capacity"]>0, df["Discharge_Capacity"]/df["Charge_Capacity"], np.nan)
+            df["Coulombic_Efficiency"] = np.where(df["Charge_Capacity"]>0,
+                                                  df["Discharge_Capacity"]/df["Charge_Capacity"], np.nan)
     if "Energy_Efficiency" not in df.columns and {"Discharge_Energy","Charge_Energy"}.issubset(df.columns):
         with np.errstate(divide='ignore', invalid='ignore'):
-            df["Energy_Efficiency"] = np.where(df["Charge_Energy"]>0, df["Discharge_Energy"]/df["Charge_Energy"], np.nan)
+            df["Energy_Efficiency"] = np.where(df["Charge_Energy"]>0,
+                                               df["Discharge_Energy"]/df["Charge_Energy"], np.nan)
     if "CEF" not in df.columns and {"Coulombic_Efficiency","Energy_Efficiency"}.issubset(df.columns):
         CE = df["Coulombic_Efficiency"].astype(float)
         EE = df["Energy_Efficiency"].astype(float)
@@ -50,35 +52,59 @@ if uploaded_file is not None:
         if mode == "Raw cycler Excel":
             sheet_name, df_raw = load_excel_first_sheet(uploaded_file)
             st.success(f"File uploaded successfully! Sheet: {sheet_name}")
-
             st.subheader("📊 Original Data Preview")
             st.write(f"Dataset shape: {df_raw.shape}")
             st.dataframe(df_raw.head())
 
-            with st.expander("🧪 Data Preparation (edit, map, and clean)", expanded=True):
-                st.caption("Edit cells, add or delete rows before processing.")
+            with st.expander("🧪 Data Preparation (edit, rename, map, and clean)", expanded=True):
+                st.caption("Edit cells, rename columns, add or delete rows before processing.")
                 editable = st.data_editor(df_raw, num_rows="dynamic", use_container_width=True)
-                can_process = all(k in editable.columns for k in ["Time","Date","Current (mA)","Capacity (mAh)","Energy (mWh)"])
+
+                # Rename Columns
+                df_for_next = editable.copy()
+                rename_map = {}
+                for col in editable.columns:
+                    new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_raw_{col}")
+                    if new and new != col:
+                        rename_map[col] = new
+                df_for_next = df_for_next.rename(columns=rename_map)
+                st.write("Preview after renaming:")
+                st.dataframe(df_for_next.head())
+
+                # Mapping & processing
+                can_process = all(k in df_for_next.columns for k in ["Time","Date","Current (mA)","Capacity (mAh)","Energy (mWh)"])
                 if not can_process:
-                    st.error("For raw processing, ensure columns: Time, Date, Current (mA), Capacity (mAh), Energy (mWh).")
+                    st.error("Ensure columns: Time, Date, Current (mA), Capacity (mAh), Energy (mWh).")
                 else:
                     with st.spinner("Processing raw data..."):
-                        final_dataset = build_final_dataset(editable, remove_first_row)
+                        final_dataset = build_final_dataset(df_for_next, remove_first_row)
 
         else:
             df_loaded, fmt = _read_any(uploaded_file)
             st.success(f"Processed dataset loaded ({fmt}).")
 
-            with st.expander("🧪 Data Preparation (edit and compute missing fields)", expanded=True):
+            with st.expander("🧪 Data Preparation (edit, rename, compute missing fields)", expanded=True):
                 editable = st.data_editor(df_loaded, num_rows="dynamic", use_container_width=True)
-                df_mapped = editable.copy()  # optional mapping could be added here
-                df_ready = compute_derivables(df_mapped)
+
+                # Rename Columns
+                df_for_next = editable.copy()
+                rename_map = {}
+                for col in editable.columns:
+                    new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_proc_{col}")
+                    if new and new != col:
+                        rename_map[col] = new
+                df_for_next = df_for_next.rename(columns=rename_map)
+                st.write("Preview after renaming:")
+                st.dataframe(df_for_next.head())
+
+                # Compute derivable fields and validate
+                df_ready = compute_derivables(df_for_next)
                 try:
-                    # Try strict validator first
-                    final_dataset, notes = validate_processed_dataset(io.BytesIO(editable.to_csv(index=False).encode())) \
-                        if fmt == "csv" else validate_processed_dataset(uploaded_file)
+                    final_dataset, notes = validate_processed_dataset(
+                        io.BytesIO(df_for_next.to_csv(index=False).encode())
+                        if fmt == "csv" else uploaded_file
+                    )
                 except Exception:
-                    # Fall back to the editor-derived frame (best-effort)
                     final_dataset = df_ready
                     notes = ["Used edited data with computed fields (best-effort)."]
                 if notes:
