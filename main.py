@@ -44,18 +44,6 @@ def compute_derivables(df: pd.DataFrame):
         df.insert(0, "Cycle_Number", range(1, len(df)+1))
     return df
 
-def _ensure_derivables(df: pd.DataFrame):
-    d = df.copy()
-    if "Coulombic_Efficiency" not in d.columns and {"Discharge_Capacity","Charge_Capacity"}.issubset(d.columns):
-        with np.errstate(divide='ignore', invalid='ignore'):
-            d["Coulombic_Efficiency"] = np.where(d["Charge_Capacity"]>0,
-                                                 d["Discharge_Capacity"]/d["Charge_Capacity"], np.nan)
-    if "Energy_Efficiency" not in d.columns and {"Discharge_Energy","Charge_Energy"}.issubset(d.columns):
-        with np.errstate(divide='ignore', invalid='ignore'):
-            d["Energy_Efficiency"] = np.where(d["Charge_Energy"]>0,
-                                              d["Discharge_Energy"]/d["Charge_Energy"], np.nan)
-    return d
-
 uploaded_file = st.file_uploader(
     "Upload file",
     type=(['xlsx','xls'] if mode == "Raw cycler Excel" else ['csv','xlsx','xls'])
@@ -143,9 +131,6 @@ if uploaded_file is not None:
             st.write(f"Final dataset shape: {final_dataset.shape}")
             st.dataframe(final_dataset.head(10))
 
-            # Ensure CE/EE exist if derivable (for charts)
-            final_dataset = _ensure_derivables(final_dataset)
-
             # Quick hint for efficiencies visibility
             missing_eff = [c for c in ["Coulombic_Efficiency","Energy_Efficiency"] if c not in final_dataset.columns]
             if missing_eff:
@@ -154,11 +139,22 @@ if uploaded_file is not None:
             st.subheader("📈 CEF Analysis - First 10 Cycles")
             stats = first_n_cef_stats(final_dataset, first_n=10)
 
+            # Compute sample variance (ddof=1) from std if available, else direct
+            cef_var = None
+            if stats.get("std") is not None:
+                cef_var = float(stats["std"] ** 2)
+            else:
+                try:
+                    if "CEF" in stats["first_n_df"].columns and len(stats["first_n_df"]["CEF"]) >= 2:
+                        cef_var = float(np.var(stats["first_n_df"]["CEF"].to_numpy(dtype=float), ddof=1))
+                except Exception:
+                    cef_var = None
+
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("CEF Slope", f"{stats['slope']:.6f}" if stats['slope'] is not None else "N/A", help="Linear regression slope")
             col2.metric("CEF Range", f"{stats['range']:.6f}" if stats['range'] is not None else "N/A", help="Max - Min CEF values")
-            col3.metric("CEF Std Dev", f"{stats['std']:.6f}" if stats['std'] is not None else "N/A", help="Standard deviation")
-            col4.metric("CEF Mean", f"{stats['mean']:.6f}" if stats['mean'] is not None else "N/A", help="Average CEF value")
+            col3.metric("CEF Std Dev", f"{stats['std']:.6f}" if stats['std'] is not None else "N/A", help="Sample standard deviation (ddof=1)")
+            col4.metric("CEF Variance", f"{cef_var:.6f}" if cef_var is not None else "N/A", help="Sample variance (ddof=1)")
 
             st.plotly_chart(cef_figure(stats), use_container_width=True)
 
@@ -171,13 +167,13 @@ if uploaded_file is not None:
 
             st.subheader("💾 Download Results")
             statistics_df = pd.DataFrame({
-                'Parameter': ['CEF Slope (Linear Regression)', 'CEF Range', 'CEF Standard Deviation', 'CEF Mean'],
-                'Value': [stats['slope'], stats['range'], stats['std'], stats['mean']],
+                'Parameter': ['CEF Slope (Linear Regression)', 'CEF Range', 'CEF Standard Deviation', 'CEF Variance'],
+                'Value': [stats['slope'], stats['range'], stats['std'], cef_var],
                 'Description': [
                     'Linear regression slope of CEF vs Cycle Number for first 10 cycles',
                     'Difference between maximum and minimum CEF values in first 10 cycles',
-                    'Sample standard deviation of CEF values for first 10 cycles',
-                    'Mean CEF value for first 10 cycles'
+                    'Sample standard deviation (ddof=1) of CEF for first 10 cycles',
+                    'Sample variance (ddof=1) of CEF for first 10 cycles'
                 ]
             })
             output = io.BytesIO()
