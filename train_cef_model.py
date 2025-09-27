@@ -30,7 +30,6 @@ def load_excel_features(file_like_or_path, sheet=0):
     df = df.dropna(subset=["cef_slope","cef_range","cef_std","cef_var","label"]).reset_index(drop=True)
     df["label"] = df["label"].astype(int)
     return df
-
 def train_from_dataframe(df, random_state=42):
     X = df[["cef_slope","cef_range","cef_std","cef_var"]].values
     y = df["label"].values
@@ -48,9 +47,17 @@ def train_from_dataframe(df, random_state=42):
         "max_depth": [None, 3, 5],
         "max_iter": [100, 200, 400]
     }
+
     gkf = GroupKFold(n_splits=5)
-    gs = GridSearchCV(clf, param_grid=param_grid, scoring="f1",
-                      cv=gkf.split(X_train, y_train, groups=groups_train), n_jobs=-1)
+    cv_iter = gkf.split(X_train, y_train, groups=groups_train)
+
+    gs = GridSearchCV(
+        estimator=clf,
+        param_grid=param_grid,
+        scoring="f1",
+        cv=cv_iter,
+        n_jobs=-1
+    )
     gs.fit(X_train, y_train)
     best = gs.best_estimator_
 
@@ -60,8 +67,9 @@ def train_from_dataframe(df, random_state=42):
     report = classification_report(y_test, y_pred, digits=4)
     cm = confusion_matrix(y_test, y_pred)
 
-    cv_scores = cross_val_score(best, X_train, y_train, scoring="f1",
-                                cv=gkf.split(X_train, y_train, groups=groups_train), n_jobs=-1)
+    # New iterator (cv_iter is exhausted by GridSearchCV)
+    cv_iter_full = gkf.split(X_train, y_train, groups=groups_train)
+    cv_scores = cross_val_score(best, X_train, y_train, scoring="f1", cv=cv_iter_full, n_jobs=-1)
 
     return {
         "best_params": gs.best_params_,
