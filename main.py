@@ -16,6 +16,9 @@ st.set_page_config(page_title="Battery Health Prediction - CEF Analysis", page_i
 st.title("🔋 Battery Health Prediction - CEF Analysis")
 st.markdown("Upload raw cycler data for full processing or upload an already processed dataset to compute CEF statistics and plots")
 
+# Target feature proportions
+TARGET_W = {"cef_slope":0.364803, "cef_std":0.286279, "cef_range":0.216227, "cef_var":0.132692}
+
 st.sidebar.header("Mode")
 mode = st.sidebar.radio(
     "Choose input type",
@@ -28,10 +31,13 @@ remove_first_row = st.sidebar.checkbox(
     help="Applies only to raw cycler Excel processing"
 )
 
-# Slope weight control (used in training, inference, and SHAP)
 SLOPE_WEIGHT = st.sidebar.number_input(
     "CEF slope weight", min_value=0.1, max_value=20.0, value=1.0, step=0.1,
-    help="Multiply cef_slope by this factor before scaling. Use the same value for training, prediction, and SHAP."
+    help="Multiply cef_slope by this factor before scaling. Keep consistent across training, prediction, and SHAP."
+)
+K_MULT = st.sidebar.number_input(
+    "Target-importance strength k", min_value=0.0, max_value=20.0, value=5.0, step=0.5,
+    help="Higher k pushes the model to emphasize the target feature proportions."
 )
 
 # -------- Persistent model load / upload --------
@@ -71,14 +77,18 @@ def compute_derivables(df: pd.DataFrame):
     return df
 
 def _features_from_stats(stats):
-    slope = stats.get("slope")
-    rng = stats.get("range")
-    std = stats.get("std")
+    slope = stats.get("slope"); rng = stats.get("range"); std = stats.get("std")
     var = (std ** 2) if std is not None else None
     if None in (slope, rng, std, var):
         return None
     arr = np.array([[slope, rng, std, var]], dtype=float)
-    arr[:,0] *= float(SLOPE_WEIGHT)  # emphasize slope consistently
+    mul = np.array([
+        (1.0 + K_MULT * TARGET_W["cef_slope"]) * float(SLOPE_WEIGHT),
+        (1.0 + K_MULT * TARGET_W["cef_range"]),
+        (1.0 + K_MULT * TARGET_W["cef_std"]),
+        (1.0 + K_MULT * TARGET_W["cef_var"]),
+    ], dtype=float)
+    arr = arr * mul
     return arr
 
 uploaded_files = st.file_uploader(
@@ -316,7 +326,7 @@ with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False)
 
             if st.button("Train model", type="primary"):
                 with st.spinner("Training Gradient Boosting (grouped CV)…"):
-                    res = train_from_dataframe(df_train, random_state=42, slope_weight=SLOPE_WEIGHT)
+                    res = train_from_dataframe(df_train, random_state=42, slope_weight=SLOPE_WEIGHT, k=K_MULT)
                 st.success("Training complete")
                 st.write("Model parameters:", res["best_params"])
                 if res["cv_f1_mean"] is not None:
@@ -333,7 +343,6 @@ with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False)
         except Exception as e:
             st.error(f"Training error: {e}")
 
-# SHAP expander
 with st.expander("🔍 Model explainability (SHAP)", expanded=False):
     st.caption("Compute and display SHAP feature importance for the current trained model using the labeled CEF stats Excel.")
     shap_excel = st.file_uploader("Upload labeled CEF stats Excel for SHAP", type=["xlsx","xls"], key="shap_xlsx")
@@ -342,7 +351,13 @@ with st.expander("🔍 Model explainability (SHAP)", expanded=False):
             df_shap = load_excel_features(shap_excel, sheet=0)
             feature_names = ["cef_slope","cef_range","cef_std","cef_var"]
             X_all = df_shap[feature_names].values.astype(float)
-            X_all[:,0] *= float(SLOPE_WEIGHT)  # keep identical to training
+            mul = np.array([
+                (1.0 + K_MULT * TARGET_W["cef_slope"]) * float(SLOPE_WEIGHT),
+                (1.0 + K_MULT * TARGET_W["cef_range"]),
+                (1.0 + K_MULT * TARGET_W["cef_std"]),
+                (1.0 + K_MULT * TARGET_W["cef_var"]),
+            ], dtype=float)
+            X_all = X_all * mul
 
             scaler = getattr(model, "named_steps", {}).get("scaler", None)
             clf = getattr(model, "named_steps", {}).get("gbc", None)
