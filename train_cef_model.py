@@ -53,16 +53,28 @@ def group_stratified_split(labels, groups, test_size=0.25, random_state=42):
     test_mask = np.isin(groups, test_groups)
     return np.where(train_mask)[0], np.where(test_mask)[0]
 
-def train_from_dataframe(df, random_state=42):
-    X = df[["cef_slope","cef_range","cef_std","cef_var"]].values
+def train_from_dataframe(df, random_state=42, slope_weight=3.0):
+    from sklearn.model_selection import GroupKFold, cross_val_score
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.ensemble import GradientBoostingClassifier
+    from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+
+    feature_names = ["cef_slope","cef_range","cef_std","cef_var"]
+    X = df[feature_names].values.astype(float)
     y = df["label"].values.astype(int)
     groups_all = df["cell_id"].values
 
+    # Reweight slope column (index 0)
+    X[:, 0] *= float(slope_weight)
+
+    # Split
     train_idx, test_idx = group_stratified_split(y, groups_all, test_size=0.25, random_state=random_state)
     X_train, X_test = X[train_idx], X[test_idx]
     y_train, y_test = y[train_idx], y[test_idx]
     groups_train = groups_all[train_idx]
 
+    # Pipeline
     pipeline = Pipeline([
         ('scaler', StandardScaler()),
         ('gbc', GradientBoostingClassifier(n_estimators=200, random_state=random_state))
@@ -70,6 +82,7 @@ def train_from_dataframe(df, random_state=42):
 
     pipeline.fit(X_train, y_train)
 
+    # Evaluation
     y_pred = pipeline.predict(X_test)
     proba_method = getattr(pipeline, "predict_proba", None)
     y_proba_scores = None
@@ -87,13 +100,13 @@ def train_from_dataframe(df, random_state=42):
     if y_proba_scores is not None and len(np.unique(y_test)) == 2:
         auc = float(roc_auc_score(y_test, y_proba_scores))
 
-    # Cross-validation on training set
+    # Cross-val
     gkf = GroupKFold(n_splits=5)
     cv_iter = list(gkf.split(X_train, y_train, groups=groups_train))
     cv_scores = cross_val_score(pipeline, X_train, y_train, scoring="f1", cv=cv_iter, n_jobs=-1)
 
     return {
-        "best_params": {"n_estimators": 200, "random_state": random_state},
+        "best_params": {"n_estimators": 200, "random_state": random_state, "slope_weight": float(slope_weight)},
         "cv_f1_mean": float(cv_scores.mean()),
         "cv_f1_std": float(cv_scores.std()),
         "test_report": report,
