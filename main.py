@@ -72,184 +72,187 @@ def _features_from_stats(stats):
     if None in (slope, rng, std, var):
         return None
     return np.array([[slope, rng, std, var]], dtype=float)
+
 uploaded_files = st.file_uploader(
     "Upload files",
     type=(['xlsx','xls'] if mode == "Raw cycler Excel" else ['csv','xlsx','xls']),
     accept_multiple_files=True
 )
 
-if uploaded_file is not None:
-    try:
-        final_dataset = None
+if uploaded_files is not None:
+    for uploaded_file in uploaded_files:
+        try:
+            final_dataset = None
 
-        if mode == "Raw cycler Excel":
-            sheet_name, df_raw = load_excel_first_sheet(uploaded_file)
-            st.success(f"File uploaded successfully! Sheet: {sheet_name}")
-            st.subheader("📊 Original Data Preview")
-            st.write(f"Dataset shape: {df_raw.shape}")
-            st.dataframe(df_raw.head())
+            st.write(f"Processing file: {uploaded_file.name}")
 
-            with st.expander("🧪 Data Preparation (edit, rename, auto-map, and clean)", expanded=True):
-                st.caption("Edit cells, rename columns, and let the app recognize common aliases before processing.")
-                editable = st.data_editor(df_raw, num_rows="dynamic", use_container_width=True)
+            if mode == "Raw cycler Excel":
+                sheet_name, df_raw = load_excel_first_sheet(uploaded_file)
+                st.success(f"File uploaded successfully! Sheet: {sheet_name}")
+                st.subheader("📊 Original Data Preview")
+                st.write(f"Dataset shape: {df_raw.shape}")
+                st.dataframe(df_raw.head())
 
-                # Rename Columns
-                df_for_next = editable.copy()
-                rename_map = {}
-                for col in editable.columns:
-                    new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_raw_{col}")
-                    if new and new != col:
-                        rename_map[col] = new
-                if rename_map:
-                    df_for_next = df_for_next.rename(columns=rename_map)
+                with st.expander("🧪 Data Preparation (edit, rename, auto-map, and clean)", expanded=True):
+                    st.caption("Edit cells, rename columns, and let the app recognize common aliases before processing.")
+                    editable = st.data_editor(df_raw, num_rows="dynamic", use_container_width=True)
 
-                # Auto-canonicalize common aliases to canonical names
-                df_for_next, canon_notes = canonicalize_columns(df_for_next, ALIAS_MAP)
-                if canon_notes:
-                    st.info(" | ".join(canon_notes))
+                    # Rename Columns
+                    df_for_next = editable.copy()
+                    rename_map = {}
+                    for col in editable.columns:
+                        new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_raw_{col}{uploaded_file.name}")
+                        if new and new != col:
+                            rename_map[col] = new
+                    if rename_map:
+                        df_for_next = df_for_next.rename(columns=rename_map)
 
-                st.write("Preview after renaming & canonicalization:")
-                st.dataframe(df_for_next.head())
+                    # Auto-canonicalize common aliases to canonical names
+                    df_for_next, canon_notes = canonicalize_columns(df_for_next, ALIAS_MAP)
+                    if canon_notes:
+                        st.info(" | ".join(canon_notes))
 
-                # Processing
-                required = ["Time","Date","Current (mA)","Capacity (mAh)","Energy (mWh)"]
-                can_process = all(k in df_for_next.columns for k in required)
-                if not can_process:
-                    missing = [k for k in required if k not in df_for_next.columns]
-                    st.error(f"Missing required columns for raw processing: {missing}")
-                else:
-                    with st.spinner("Processing raw data..."):
-                        final_dataset = build_final_dataset(df_for_next, remove_first_row)
+                    st.write("Preview after renaming & canonicalization:")
+                    st.dataframe(df_for_next.head())
 
-        else:
-            df_loaded, fmt = _read_any(uploaded_file)
-            st.success(f"Processed dataset loaded ({fmt}).")
+                    # Processing
+                    required = ["Time","Date","Current (mA)","Capacity (mAh)","Energy (mWh)"]
+                    can_process = all(k in df_for_next.columns for k in required)
+                    if not can_process:
+                        missing = [k for k in required if k not in df_for_next.columns]
+                        st.error(f"Missing required columns for raw processing: {missing}")
+                    else:
+                        with st.spinner("Processing raw data..."):
+                            final_dataset = build_final_dataset(df_for_next, remove_first_row)
 
-            with st.expander("🧪 Data Preparation (edit, rename, auto-map, compute missing fields)", expanded=True):
-                editable = st.data_editor(df_loaded, num_rows="dynamic", use_container_width=True)
-
-                # Rename Columns
-                df_for_next = editable.copy()
-                rename_map = {}
-                for col in editable.columns:
-                    new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_proc_{col}")
-                    if new and new != col:
-                        rename_map[col] = new
-                if rename_map:
-                    df_for_next = df_for_next.rename(columns=rename_map)
-
-                # Auto-canonicalize aliases
-                df_for_next, canon_notes = canonicalize_columns(df_for_next, ALIAS_MAP)
-                if canon_notes:
-                    st.info(" | ".join(canon_notes))
-
-                # Compute derivable fields and validate the DataFrame directly
-                df_ready = compute_derivables(df_for_next)
-                try:
-                    final_dataset, notes = validate_processed_dataframe(df_ready)
-                except Exception as e:
-                    final_dataset = df_ready
-                    notes = [f"Validation fallback: {e}"]
-                if notes:
-                    st.warning("Notes: " + " | ".join(notes))
-
-        if final_dataset is None or final_dataset.empty:
-            st.warning("No valid rows available for analysis after preparation. Please adjust the data and try again.")
-        else:
-            st.subheader("🔧 Data Preview For Analysis")
-            st.write(f"Final dataset shape: {final_dataset.shape}")
-            st.dataframe(final_dataset.head(10))
-
-            # Quick hint for efficiencies visibility
-            missing_eff = [c for c in ["Coulombic_Efficiency","Energy_Efficiency"] if c not in final_dataset.columns]
-            if missing_eff:
-                st.info(f"Efficiency columns missing: {missing_eff}. They are computed when capacity/energy pairs are present.")
-
-            st.subheader("📈 CEF Analysis - First 10 Cycles")
-            stats = first_n_cef_stats(final_dataset, first_n=10)
-
-            # Compute sample variance (ddof=1) from std if available, else direct
-            cef_var = None
-            if stats.get("std") is not None:
-                cef_var = float(stats["std"] ** 2)
             else:
-                try:
-                    if "CEF" in stats["first_n_df"].columns and len(stats["first_n_df"]["CEF"]) >= 2:
-                        cef_var = float(np.var(stats["first_n_df"]["CEF"].to_numpy(dtype=float), ddof=1))
-                except Exception:
-                    cef_var = None
+                df_loaded, fmt = _read_any(uploaded_file)
+                st.success(f"Processed dataset loaded ({fmt}).")
 
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("CEF Slope", f"{stats['slope']:.6f}" if stats['slope'] is not None else "N/A", help="Linear regression slope")
-            col2.metric("CEF Range", f"{stats['range']:.6f}" if stats['range'] is not None else "N/A", help="Max - Min CEF values")
-            col3.metric("CEF Std Dev", f"{stats['std']:.6f}" if stats['std'] is not None else "N/A", help="Sample standard deviation (ddof=1)")
-            col4.metric("CEF Variance", f"{cef_var:.6f}" if cef_var is not None else "N/A", help="Sample variance (ddof=1)")
+                with st.expander("🧪 Data Preparation (edit, rename, auto-map, compute missing fields)", expanded=True):
+                    editable = st.data_editor(df_loaded, num_rows="dynamic", use_container_width=True)
 
-            st.plotly_chart(cef_figure(stats), use_container_width=True)
+                    # Rename Columns
+                    df_for_next = editable.copy()
+                    rename_map = {}
+                    for col in editable.columns:
+                        new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_proc_{col}{uploaded_file.name}")
+                        if new and new != col:
+                            rename_map[col] = new
+                    if rename_map:
+                        df_for_next = df_for_next.rename(columns=rename_map)
 
-            st.subheader("📊 Additional Analysis")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.plotly_chart(efficiencies_figure(stats), use_container_width=True)
-            with c2:
-                st.plotly_chart(capacities_figure(stats), use_container_width=True)
+                    # Auto-canonicalize aliases
+                    df_for_next, canon_notes = canonicalize_columns(df_for_next, ALIAS_MAP)
+                    if canon_notes:
+                        st.info(" | ".join(canon_notes))
 
-            st.subheader("🧪 Condition prediction")
-            if model is None:
-                st.info("Load or train a model to enable predictions.")
+                    # Compute derivable fields and validate the DataFrame directly
+                    df_ready = compute_derivables(df_for_next)
+                    try:
+                        final_dataset, notes = validate_processed_dataframe(df_ready)
+                    except Exception as e:
+                        final_dataset = df_ready
+                        notes = [f"Validation fallback: {e}"]
+                    if notes:
+                        st.warning("Notes: " + " | ".join(notes))
+
+            if final_dataset is None or final_dataset.empty:
+                st.warning("No valid rows available for analysis after preparation. Please adjust the data and try again.")
             else:
-                feats = _features_from_stats(stats)
-                if feats is None:
-                    st.info("Not enough data to form features for inference (need slope, range, std).")
+                st.subheader("🔧 Data Preview For Analysis")
+                st.write(f"Final dataset shape: {final_dataset.shape}")
+                st.dataframe(final_dataset.head(10))
+
+                # Quick hint for efficiencies visibility
+                missing_eff = [c for c in ["Coulombic_Efficiency","Energy_Efficiency"] if c not in final_dataset.columns]
+                if missing_eff:
+                    st.info(f"Efficiency columns missing: {missing_eff}. They are computed when capacity/energy pairs are present.")
+
+                st.subheader("📈 CEF Analysis - First 10 Cycles")
+                stats = first_n_cef_stats(final_dataset, first_n=10)
+
+                # Compute sample variance (ddof=1) from std if available, else direct
+                cef_var = None
+                if stats.get("std") is not None:
+                    cef_var = float(stats["std"] ** 2)
                 else:
                     try:
-                        proba = getattr(model, "predict_proba", None)
-                        if proba is not None and hasattr(model, "classes_"):
-                            probs = proba(feats)[0]
-                            if 1 in model.classes_:
-                                pos_idx = list(model.classes_).index(1)
+                        if "CEF" in stats["first_n_df"].columns and len(stats["first_n_df"]["CEF"]) >= 2:
+                            cef_var = float(np.var(stats["first_n_df"]["CEF"].to_numpy(dtype=float), ddof=1))
+                    except Exception:
+                        cef_var = None
+
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("CEF Slope", f"{stats['slope']:.6f}" if stats['slope'] is not None else "N/A", help="Linear regression slope")
+                col2.metric("CEF Range", f"{stats['range']:.6f}" if stats['range'] is not None else "N/A", help="Max - Min CEF values")
+                col3.metric("CEF Std Dev", f"{stats['std']:.6f}" if stats['std'] is not None else "N/A", help="Sample standard deviation (ddof=1)")
+                col4.metric("CEF Variance", f"{cef_var:.6f}" if cef_var is not None else "N/A", help="Sample variance (ddof=1)")
+
+                st.plotly_chart(cef_figure(stats), use_container_width=True)
+
+                st.subheader("📊 Additional Analysis")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.plotly_chart(efficiencies_figure(stats), use_container_width=True)
+                with c2:
+                    st.plotly_chart(capacities_figure(stats), use_container_width=True)
+
+                st.subheader("🧪 Condition prediction")
+                if model is None:
+                    st.info("Load or train a model to enable predictions.")
+                else:
+                    feats = _features_from_stats(stats)
+                    if feats is None:
+                        st.info("Not enough data to form features for inference (need slope, range, std).")
+                    else:
+                        try:
+                            proba = getattr(model, "predict_proba", None)
+                            if proba is not None and hasattr(model, "classes_"):
+                                probs = proba(feats)[0]
+                                if 1 in model.classes_:
+                                    pos_idx = list(model.classes_).index(1)
+                                else:
+                                    pos_idx = 1 if len(model.classes_) > 1 else 0
+                                p = float(probs[pos_idx])
+                                pred = int(p >= 0.5)
                             else:
-                                pos_idx = 1 if len(model.classes_) > 1 else 0
-                            p = float(probs[pos_idx])
-                            pred = int(p >= 0.5)
-                        else:
-                            pred = int(model.predict(feats)[0])
-                            p = None
-                        label = "Cell will degrade in future" if pred == 1 else "Cell will remain healthy in future"
-                        if p is not None:
-                            st.metric("Predicted condition", f"{label}", f"Degraded prob: {p:.2%}")
-                        else:
-                            st.metric("Predicted condition", f"{label}")
-                    except Exception as e:
-                        st.warning(f"Inference error: {e}")
+                                pred = int(model.predict(feats)[0])
+                                p = None
+                            label = "Cell will degrade in future" if pred == 1 else "Cell will remain healthy in future"
+                            if p is not None:
+                                st.metric("Predicted condition", f"{label}", f"Degraded prob: {p:.2%}")
+                            else:
+                                st.metric("Predicted condition", f"{label}")
+                        except Exception as e:
+                            st.warning(f"Inference error: {e}")
 
-            st.subheader("💾 Download Results")
-            statistics_df = pd.DataFrame({
-                'Parameter': ['CEF Slope (Linear Regression)', 'CEF Range', 'CEF Standard Deviation', 'CEF Variance'],
-                'Value': [stats['slope'], stats['range'], stats['std'], cef_var],
-                'Description': [
-                    'Linear regression slope of CEF vs Cycle Number for first 10 cycles',
-                    'Difference between maximum and minimum CEF values in first 10 cycles',
-                    'Sample standard deviation (ddof=1) of CEF for first 10 cycles',
-                    'Sample variance (ddof=1) of CEF for first 10 cycles'
-                ]
-            })
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                statistics_df.to_excel(writer, sheet_name='CEF_Statistics', index=False)
-                stats['first_n_df'].to_excel(writer, sheet_name='First_10_Cycles', index=False)
-                final_dataset.to_excel(writer, sheet_name='Complete_Dataset', index=False)
-            st.download_button("📥 Download Complete Analysis (Excel)", output.getvalue(),
-                               file_name="CEF_Analysis_Results.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            st.download_button("📄 Download Dataset (CSV)", final_dataset.to_csv(index=False),
-                               file_name="processed_battery_data.csv", mime="text/csv")
+                st.subheader("💾 Download Results")
+                statistics_df = pd.DataFrame({
+                    'Parameter': ['CEF Slope (Linear Regression)', 'CEF Range', 'CEF Standard Deviation', 'CEF Variance'],
+                    'Value': [stats['slope'], stats['range'], stats['std'], cef_var],
+                    'Description': [
+                        'Linear regression slope of CEF vs Cycle Number for first 10 cycles',
+                        'Difference between maximum and minimum CEF values in first 10 cycles',
+                        'Sample standard deviation (ddof=1) of CEF for first 10 cycles',
+                        'Sample variance (ddof=1) of CEF for first 10 cycles'
+                    ]
+                })
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    statistics_df.to_excel(writer, sheet_name='CEF_Statistics', index=False)
+                    stats['first_n_df'].to_excel(writer, sheet_name='First_10_Cycles', index=False)
+                    final_dataset.to_excel(writer, sheet_name='Complete_Dataset', index=False)
+                st.download_button("📥 Download Complete Analysis (Excel)", output.getvalue(),
+                                   file_name="CEF_Analysis_Results.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button("📄 Download Dataset (CSV)", final_dataset.to_csv(index=False),
+                                   file_name="processed_battery_data.csv", mime="text/csv")
 
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
 else:
     st.info("👆 Upload a file to begin analysis")
-
 
 st.subheader("🧠 Train classifier (Excel)")
 with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False):
@@ -276,6 +279,6 @@ with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False)
                 os.makedirs("models", exist_ok=True)
                 save_path = save_model(res["model"], path="models/cef_gb_model.joblib")
                 st.success(f"Model saved to {save_path} and will auto-load next time.")
-                model = res["model"]  # activate immediately
+                model = res["model"] # activate immediately
         except Exception as e:
             st.error(f"Training error: {e}")
