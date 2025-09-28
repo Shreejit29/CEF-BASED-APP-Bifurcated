@@ -11,7 +11,7 @@ from viz import cef_figure, efficiencies_figure, capacities_figure
 from utils import canonicalize_columns
 import joblib, os
 from train_cef_model import load_excel_features, train_from_dataframe, save_model
-SLOPE_WEIGHT = 3.0  # must match the value used in training
+
 st.set_page_config(page_title="Battery Health Prediction - CEF Analysis", page_icon="🔋", layout="wide")
 st.title("🔋 Battery Health Prediction - CEF Analysis")
 st.markdown("Upload raw cycler data for full processing or upload an already processed dataset to compute CEF statistics and plots")
@@ -27,11 +27,13 @@ remove_first_row = st.sidebar.checkbox(
     "Remove First Row (Conditioning Cycle)", value=True,
     help="Applies only to raw cycler Excel processing"
 )
+
+# Slope weight control (used in training, inference, and SHAP)
 SLOPE_WEIGHT = st.sidebar.number_input(
-    "CEF slope weight",
-    min_value=0.1, max_value=20.0, value=3.0, step=0.1,
-    help="Multiply cef_slope by this factor before scaling and modeling. Use the same value for training and inference."
+    "CEF slope weight", min_value=0.1, max_value=20.0, value=1.0, step=0.1,
+    help="Multiply cef_slope by this factor before scaling. Use the same value for training, prediction, and SHAP."
 )
+
 # -------- Persistent model load / upload --------
 MODEL_PATH_DEFAULT = "models/cef_gb_model.joblib"
 model = None
@@ -67,6 +69,7 @@ def compute_derivables(df: pd.DataFrame):
         df = df.reset_index(drop=True)
         df.insert(0, "Cycle_Number", range(1, len(df)+1))
     return df
+
 def _features_from_stats(stats):
     slope = stats.get("slope")
     rng = stats.get("range")
@@ -75,7 +78,7 @@ def _features_from_stats(stats):
     if None in (slope, rng, std, var):
         return None
     arr = np.array([[slope, rng, std, var]], dtype=float)
-    arr[:, 0] *= float(SLOPE_WEIGHT)  # reweight slope
+    arr[:,0] *= float(SLOPE_WEIGHT)  # emphasize slope consistently
     return arr
 
 uploaded_files = st.file_uploader(
@@ -90,7 +93,6 @@ if uploaded_files is not None:
     for uploaded_file in uploaded_files:
         try:
             final_dataset = None
-
             st.write(f"### Processing file: {uploaded_file.name}")
 
             if mode == "Raw cycler Excel":
@@ -103,14 +105,9 @@ if uploaded_files is not None:
                 with st.expander(f"🧪 Data Preparation for {uploaded_file.name} (edit, rename, auto-map, and clean)", expanded=True):
                     st.caption("Edit cells, rename columns, and let the app recognize common aliases before processing.")
                     editable = st.data_editor(
-                        df_raw,
-                        num_rows="dynamic",
-                        use_container_width=True,
+                        df_raw, num_rows="dynamic", use_container_width=True,
                         key=f"data_editor_raw_{uploaded_file.name}"
                     )
-
-
-                    # Rename Columns
                     df_for_next = editable.copy()
                     rename_map = {}
                     for col in editable.columns:
@@ -120,7 +117,6 @@ if uploaded_files is not None:
                     if rename_map:
                         df_for_next = df_for_next.rename(columns=rename_map)
 
-                    # Auto-canonicalize common aliases to canonical names
                     df_for_next, canon_notes = canonicalize_columns(df_for_next, ALIAS_MAP)
                     if canon_notes:
                         st.info(" | ".join(canon_notes))
@@ -128,7 +124,6 @@ if uploaded_files is not None:
                     st.write("Preview after renaming & canonicalization:")
                     st.dataframe(df_for_next.head())
 
-                    # Processing
                     required = ["Time","Date","Current (mA)","Capacity (mAh)","Energy (mWh)"]
                     can_process = all(k in df_for_next.columns for k in required)
                     if not can_process:
@@ -141,9 +136,12 @@ if uploaded_files is not None:
             else:
                 df_loaded, fmt = _read_any(uploaded_file)
                 st.success(f"Processed dataset loaded ({fmt}).")
+
                 with st.expander(f"🧪 Data Preparation for {uploaded_file.name} (edit, rename, auto-map, compute missing fields)", expanded=True):
-                    editable = st.data_editor(df_loaded, num_rows="dynamic", use_container_width=True, key=f"data_editor_proc_{uploaded_file.name}" )
-                    # Rename Columns
+                    editable = st.data_editor(
+                        df_loaded, num_rows="dynamic", use_container_width=True,
+                        key=f"data_editor_proc_{uploaded_file.name}"
+                    )
                     df_for_next = editable.copy()
                     rename_map = {}
                     for col in editable.columns:
@@ -153,12 +151,10 @@ if uploaded_files is not None:
                     if rename_map:
                         df_for_next = df_for_next.rename(columns=rename_map)
 
-                    # Auto-canonicalize aliases
                     df_for_next, canon_notes = canonicalize_columns(df_for_next, ALIAS_MAP)
                     if canon_notes:
                         st.info(" | ".join(canon_notes))
 
-                    # Compute derivable fields and validate the DataFrame directly
                     df_ready = compute_derivables(df_for_next)
                     try:
                         final_dataset, notes = validate_processed_dataframe(df_ready)
@@ -319,78 +315,57 @@ with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False)
             st.dataframe(df_train.head())
 
             if st.button("Train model", type="primary"):
-                with st.spinner("Training with grouped CV…"):
+                with st.spinner("Training Gradient Boosting (grouped CV)…"):
                     res = train_from_dataframe(df_train, random_state=42, slope_weight=SLOPE_WEIGHT)
                 st.success("Training complete")
                 st.write("Model parameters:", res["best_params"])
                 if res["cv_f1_mean"] is not None:
                     st.write(f"CV F1 score: {res['cv_f1_mean']:.4f} ± {res['cv_f1_std']:.4f}")
                 st.text("Test set classification report:\n" + res["test_report"])
-                if res["test_auc"]:
+                if res["test_auc"] is not None:
                     st.write(f"Test AUC: {res['test_auc']:.4f}")
                 st.write("Confusion matrix:", res["test_confusion_matrix"])
 
                 os.makedirs("models", exist_ok=True)
                 save_path = save_model(res["model"], path="models/cef_gb_model.joblib")
                 st.success(f"Model saved to {save_path} and will auto-load next time.")
-                model = res["model"] # activate immediately
+                model = res["model"]  # activate immediately
         except Exception as e:
             st.error(f"Training error: {e}")
 
-# Optional SHAP visualization button for the current model (global, not per-file)
+# SHAP expander
 with st.expander("🔍 Model explainability (SHAP)", expanded=False):
-    st.caption("Compute and display SHAP feature importance for the current trained model using the training data uploaded below.")
+    st.caption("Compute and display SHAP feature importance for the current trained model using the labeled CEF stats Excel.")
     shap_excel = st.file_uploader("Upload labeled CEF stats Excel for SHAP", type=["xlsx","xls"], key="shap_xlsx")
     if shap_excel is not None and model is not None:
         try:
-            # Load labeled data and compute features
             df_shap = load_excel_features(shap_excel, sheet=0)
             feature_names = ["cef_slope","cef_range","cef_std","cef_var"]
-            X_all = df_shap[feature_names].values
+            X_all = df_shap[feature_names].values.astype(float)
+            X_all[:,0] *= float(SLOPE_WEIGHT)  # keep identical to training
 
-            # Extract scaler and classifier
             scaler = getattr(model, "named_steps", {}).get("scaler", None)
             clf = getattr(model, "named_steps", {}).get("gbc", None)
-            if scaler is not None:
-                X_scaled = scaler.transform(X_all)
+            if clf is None:
+                st.info("Current model is not a GradientBoosting pipeline.")
             else:
-                X_scaled = X_all
-
-            if clf is not None:
-                import shap
+                X_scaled = scaler.transform(X_all) if scaler is not None else X_all
+                import shap, matplotlib.pyplot as plt
                 explainer = shap.TreeExplainer(clf)
                 sv = explainer.shap_values(X_scaled)
-                # Handle various SHAP versions
-                if isinstance(sv, list) and len(sv) >= 2:
-                    shap_values = sv[1]
-                elif isinstance(sv, np.ndarray):
-                    shap_values = sv
-                else:
-                    shap_values = None
+                shap_values = sv[1] if isinstance(sv, list) and len(sv)>=2 else sv
 
-                if shap_values is not None:
-                    st.write("Mean |SHAP| feature importance:")
-                    mean_abs = np.mean(np.abs(shap_values), axis=0)
-                    shap_df = pd.DataFrame({"feature": feature_names, "mean_abs_shap": mean_abs}).sort_values("mean_abs_shap", ascending=False)
-                    st.dataframe(shap_df)
+                mean_abs = np.mean(np.abs(shap_values), axis=0)
+                shap_df = pd.DataFrame({"feature": feature_names, "mean_abs_shap": mean_abs}).sort_values("mean_abs_shap", ascending=False)
+                st.dataframe(shap_df)
 
-                    st.write("SHAP summary (dot) plot")
-                    import matplotlib.pyplot as plt
-                    import tempfile
-                    fig1 = plt.figure()
-                    shap.summary_plot(shap_values, features=X_scaled, feature_names=feature_names, show=False)
-                    st.pyplot(fig1)
-                    plt.close(fig1)
+                fig1 = plt.figure()
+                shap.summary_plot(shap_values, features=X_scaled, feature_names=feature_names, show=False)
+                st.pyplot(fig1); plt.close(fig1)
 
-                    st.write("SHAP importance (bar) plot")
-                    fig2 = plt.figure()
-                    shap.summary_plot(shap_values, features=X_scaled, feature_names=feature_names, plot_type="bar", show=False)
-                    st.pyplot(fig2)
-                    plt.close(fig2)
-                else:
-                    st.info("SHAP values could not be computed for this model.")
-            else:
-                st.info("Current model does not expose a GradientBoostingClassifier for SHAP.")
+                fig2 = plt.figure()
+                shap.summary_plot(shap_values, features=X_scaled, feature_names=feature_names, plot_type="bar", show=False)
+                st.pyplot(fig2); plt.close(fig2)
         except Exception as e:
             st.error(f"SHAP error: {e}")
     elif model is None:
