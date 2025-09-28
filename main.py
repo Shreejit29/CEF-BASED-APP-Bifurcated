@@ -331,3 +331,62 @@ with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False)
                 model = res["model"] # activate immediately
         except Exception as e:
             st.error(f"Training error: {e}")
+
+# Optional SHAP visualization button for the current model (global, not per-file)
+with st.expander("🔍 Model explainability (SHAP)", expanded=False):
+    st.caption("Compute and display SHAP feature importance for the current trained model using the training data uploaded below.")
+    shap_excel = st.file_uploader("Upload labeled CEF stats Excel for SHAP", type=["xlsx","xls"], key="shap_xlsx")
+    if shap_excel is not None and model is not None:
+        try:
+            # Load labeled data and compute features
+            df_shap = load_excel_features(shap_excel, sheet=0)
+            feature_names = ["cef_slope","cef_range","cef_std","cef_var"]
+            X_all = df_shap[feature_names].values
+
+            # Extract scaler and classifier
+            scaler = getattr(model, "named_steps", {}).get("scaler", None)
+            clf = getattr(model, "named_steps", {}).get("gbc", None)
+            if scaler is not None:
+                X_scaled = scaler.transform(X_all)
+            else:
+                X_scaled = X_all
+
+            if clf is not None:
+                import shap
+                explainer = shap.TreeExplainer(clf)
+                sv = explainer.shap_values(X_scaled)
+                # Handle various SHAP versions
+                if isinstance(sv, list) and len(sv) >= 2:
+                    shap_values = sv[1]
+                elif isinstance(sv, np.ndarray):
+                    shap_values = sv
+                else:
+                    shap_values = None
+
+                if shap_values is not None:
+                    st.write("Mean |SHAP| feature importance:")
+                    mean_abs = np.mean(np.abs(shap_values), axis=0)
+                    shap_df = pd.DataFrame({"feature": feature_names, "mean_abs_shap": mean_abs}).sort_values("mean_abs_shap", ascending=False)
+                    st.dataframe(shap_df)
+
+                    st.write("SHAP summary (dot) plot")
+                    import matplotlib.pyplot as plt
+                    import tempfile
+                    fig1 = plt.figure()
+                    shap.summary_plot(shap_values, features=X_scaled, feature_names=feature_names, show=False)
+                    st.pyplot(fig1)
+                    plt.close(fig1)
+
+                    st.write("SHAP importance (bar) plot")
+                    fig2 = plt.figure()
+                    shap.summary_plot(shap_values, features=X_scaled, feature_names=feature_names, plot_type="bar", show=False)
+                    st.pyplot(fig2)
+                    plt.close(fig2)
+                else:
+                    st.info("SHAP values could not be computed for this model.")
+            else:
+                st.info("Current model does not expose a GradientBoostingClassifier for SHAP.")
+        except Exception as e:
+            st.error(f"SHAP error: {e}")
+    elif model is None:
+        st.info("Train or load a model first.")
