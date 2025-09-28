@@ -276,7 +276,6 @@ with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False)
                 os.makedirs("models", exist_ok=True)
                 save_path = save_model(res["model"], path="models/cef_gb_model.joblib")
                 st.success(f"Model saved to {save_path} and will auto-load next time.")
-                global model
                 model = res["model"]  # activate immediately
         except Exception as e:
             st.error(f"Training error: {e}")
