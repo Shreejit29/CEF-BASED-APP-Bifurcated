@@ -136,15 +136,8 @@ if uploaded_files is not None:
             else:
                 df_loaded, fmt = _read_any(uploaded_file)
                 st.success(f"Processed dataset loaded ({fmt}).")
-
                 with st.expander(f"🧪 Data Preparation for {uploaded_file.name} (edit, rename, auto-map, compute missing fields)", expanded=True):
-                        editable = st.data_editor(
-                        df_loaded,
-                        num_rows="dynamic",
-                        use_container_width=True,
-                        key=f"data_editor_proc_{uploaded_file.name}"
-                    )
-
+                    editable = st.data_editor(df_loaded, num_rows="dynamic", use_container_width=True, key=f"data_editor_proc_{uploaded_file.name}" )
                     # Rename Columns
                     df_for_next = editable.copy()
                     rename_map = {}
