@@ -215,7 +215,7 @@ if uploaded_file is not None:
                         else:
                             pred = int(model.predict(feats)[0])
                             p = None
-                        label = "Degraded" if pred == 1 else "Healthy"
+                        label = "Cell will degrade in future" if pred == 1 else "Cell will remain healthy in future"
                         if p is not None:
                             st.metric("Predicted condition", f"{label}", f"Degraded prob: {p:.2%}")
                         else:
