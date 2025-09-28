@@ -1,12 +1,13 @@
 import numpy as np
 import pandas as pd
-from collections import defaultdict
 from sklearn.model_selection import GroupKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
 import joblib, os
+
+TARGET_W = {"cef_slope":0.364803, "cef_std":0.286279, "cef_range":0.216227, "cef_var":0.132692}
 
 # ---------------- IO ----------------
 def load_excel_features(file_like_or_path, sheet=0):
@@ -51,14 +52,20 @@ def group_stratified_split(labels, groups, test_size=0.25, random_state=42):
     return np.where(train_mask)[0], np.where(test_mask)[0]
 
 # ------------- train ---------------
-def train_from_dataframe(df, random_state=42, slope_weight=1.0):
+def train_from_dataframe(df, random_state=42, slope_weight=1.0, k=5.0):
     feature_names = ["cef_slope","cef_range","cef_std","cef_var"]
     X = df[feature_names].values.astype(float)
     y = df["label"].values.astype(int)
     groups_all = df["cell_id"].values
 
-    # emphasize slope if requested
-    X[:,0] *= float(slope_weight)
+    # Build per-feature multipliers; k controls strength; slope_weight further scales slope if desired
+    mul = np.array([
+        (1.0 + k * TARGET_W["cef_slope"]) * float(slope_weight),  # slope (index 0)
+        (1.0 + k * TARGET_W["cef_range"]),                        # range (index 1)
+        (1.0 + k * TARGET_W["cef_std"]),                          # std   (index 2)
+        (1.0 + k * TARGET_W["cef_var"]),                          # var   (index 3)
+    ], dtype=float)
+    X = X * mul  # elementwise by column via broadcasting
 
     # split
     train_idx, test_idx = group_stratified_split(y, groups_all, test_size=0.25, random_state=random_state)
@@ -84,6 +91,7 @@ def train_from_dataframe(df, random_state=42, slope_weight=1.0):
             y_proba_scores = proba
 
     report = classification_report(y_test, y_pred, digits=4, zero_division=0)
+    from sklearn.metrics import confusion_matrix
     cm = confusion_matrix(y_test, y_pred).tolist()
     auc = None
     if y_proba_scores is not None and len(np.unique(y_test)) == 2:
@@ -95,7 +103,7 @@ def train_from_dataframe(df, random_state=42, slope_weight=1.0):
     cv_scores = cross_val_score(pipeline, X_train, y_train, scoring="f1", cv=cv_iter, n_jobs=-1)
 
     return {
-        "best_params": {"model":"GradientBoostingClassifier","n_estimators":200,"random_state":random_state,"slope_weight":float(slope_weight)},
+        "best_params": {"model":"GradientBoostingClassifier","n_estimators":200,"random_state":random_state,"slope_weight":float(slope_weight),"k":float(k)},
         "cv_f1_mean": float(cv_scores.mean()),
         "cv_f1_std": float(cv_scores.std()),
         "test_report": report,
