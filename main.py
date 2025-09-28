@@ -97,7 +97,13 @@ if uploaded_files is not None:
 
                 with st.expander(f"🧪 Data Preparation for {uploaded_file.name} (edit, rename, auto-map, and clean)", expanded=True):
                     st.caption("Edit cells, rename columns, and let the app recognize common aliases before processing.")
-                    editable = st.data_editor(df_raw, num_rows="dynamic", use_container_width=True)
+                    editable = st.data_editor(
+                        df_raw,
+                        num_rows="dynamic",
+                        use_container_width=True,
+                        key=f"data_editor_raw_{uploaded_file.name}"
+                    )
+
 
                     # Rename Columns
                     df_for_next = editable.copy()
@@ -132,7 +138,12 @@ if uploaded_files is not None:
                 st.success(f"Processed dataset loaded ({fmt}).")
 
                 with st.expander(f"🧪 Data Preparation for {uploaded_file.name} (edit, rename, auto-map, compute missing fields)", expanded=True):
-                    editable = st.data_editor(df_loaded, num_rows="dynamic", use_container_width=True)
+                        editable = st.data_editor(
+                        df_loaded,
+                        num_rows="dynamic",
+                        use_container_width=True,
+                        key=f"data_editor_proc_{uploaded_file.name}"
+                    )
 
                     # Rename Columns
                     df_for_next = editable.copy()
