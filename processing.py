@@ -41,6 +41,11 @@ def build_final_dataset(df_raw: pd.DataFrame, remove_first_row: bool) -> pd.Data
         raise ValueError(f"Missing required raw fields after mapping/canonicalization: {missing}")
 
     df = df_raw.copy()
+
+    # Create Sr. No. if missing to stabilize ordering
+    if 'Sr. No.' not in df.columns:
+        df.insert(0, 'Sr. No.', range(1, len(df)+1))
+
     df['Time_Hours'] = df['Time'].apply(time_to_decimal_hours)
     df_cleaned = df.drop([c for c in ['Time', 'Date'] if c in df.columns], axis=1)
 
@@ -143,14 +148,13 @@ def validate_processed_dataset(uploaded_file):
     df, fmt = _read_any(uploaded_file)
     if df.empty:
         raise ValueError("Processed dataset is empty.")
-
     return validate_processed_dataframe(df)
 
 def validate_processed_dataframe(df_in: pd.DataFrame):
     df = df_in.copy()
     notes = []
 
-    # Ensure Cycle_Number
+    # Ensure Cycle_Number exists
     if "Cycle_Number" not in df.columns:
         df = df.reset_index(drop=True)
         df.insert(0, "Cycle_Number", range(1, len(df) + 1))
@@ -180,6 +184,11 @@ def validate_processed_dataframe(df_in: pd.DataFrame):
              or ({"Discharge_Capacity","Charge_Capacity","Discharge_Energy","Charge_Energy"}.issubset(df.columns))
     if not has_ok:
         raise ValueError("Processed dataset lacks required columns. Provide CEF or CE+EE or full capacity/energy pairs.")
+
+    # Coerce numeric types for downstream stats
+    for c in ["Charge_Capacity","Discharge_Capacity","Charge_Energy","Discharge_Energy","Coulombic_Efficiency","Energy_Efficiency","CEF"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
 
     preferred_order = ["Cycle_Number",
                        "Charge_Capacity", "Discharge_Capacity",
