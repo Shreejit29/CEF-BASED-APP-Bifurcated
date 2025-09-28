@@ -5,17 +5,36 @@ from typing import Dict, List, Tuple
 import pandas as pd
 
 def time_to_decimal_hours(time_str):
-    t = datetime.strptime(str(time_str), '%H:%M:%S.%f')
-    return t.hour + t.minute/60 + t.second/3600 + t.microsecond/3600000000
+    """
+    Convert 'HH:MM:SS' or 'HH:MM:SS.sss' to decimal hours.
+    Accepts strings or pandas/Excel time-like objects.
+    """
+    s = str(time_str)
+    # Try multiple precise formats
+    for fmt in ("%H:%M:%S.%f", "%H:%M:%S"):
+        try:
+            t = datetime.strptime(s, fmt)
+            return t.hour + t.minute/60 + t.second/3600 + t.microsecond/3600000000
+        except Exception:
+            continue
+    # Fallback: try pandas to_datetime
+    try:
+        t = pd.to_datetime(s, errors="coerce")
+        if pd.isna(t):
+            raise ValueError
+        return t.hour + t.minute/60 + t.second/3600 + t.microsecond/3600000000
+    except Exception:
+        # Final fallback: return NaN for bad inputs
+        return np.nan
 
 def safe_stats(values):
     n = len(values)
     if n == 0:
         return {"range": None, "std": None, "mean": None}
     arr = np.asarray(values, dtype=float)
-    rng = float(arr.max() - arr.min()) if n >= 1 else None
-    std = float(np.std(arr, ddof=1)) if n >= 2 else 0.0
-    mean = float(np.mean(arr)) if n >= 1 else None
+    rng = float(np.nanmax(arr) - np.nanmin(arr)) if n >= 1 else None
+    std = float(np.nanstd(arr, ddof=1)) if n >= 2 else 0.0
+    mean = float(np.nanmean(arr)) if n >= 1 else None
     return {"range": rng, "std": std, "mean": mean}
 
 # ---------------- Column canonicalization ----------------
@@ -55,6 +74,6 @@ def canonicalize_columns(df: pd.DataFrame, alias_map: Dict[str, List[str]]) -> T
 
     notes = []
     if rename:
-        notes.append("Canonicalized: " + ", ".join([f"{k}->{v}" for k, v in rename.items()]))
+        notes.append("Canonicalized: " + ", ".join([f\"{k}->{v}\" for k, v in rename.items()]))
 
     return df.rename(columns=rename), notes
