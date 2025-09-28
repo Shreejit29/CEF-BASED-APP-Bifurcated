@@ -72,10 +72,10 @@ def _features_from_stats(stats):
     if None in (slope, rng, std, var):
         return None
     return np.array([[slope, rng, std, var]], dtype=float)
-
-uploaded_file = st.file_uploader(
-    "Upload file",
-    type=(['xlsx','xls'] if mode == "Raw cycler Excel" else ['csv','xlsx','xls'])
+uploaded_files = st.file_uploader(
+    "Upload files",
+    type=(['xlsx','xls'] if mode == "Raw cycler Excel" else ['csv','xlsx','xls']),
+    accept_multiple_files=True
 )
 
 if uploaded_file is not None:
