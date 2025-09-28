@@ -34,7 +34,7 @@ def load_excel_features(file_like_or_path, sheet=0):
     df["label"] = df["label"].astype(int)
     return df
 
-def group_stratified_split(labels, groups, test_size=0.25, random_state=42):
+def group_stratified_split(labels, groups, test_size=0.2, random_state=42):
     rng = np.random.RandomState(random_state)
     group_to_label = {}
     for g, y in zip(groups, labels):
