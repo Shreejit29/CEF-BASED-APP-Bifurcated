@@ -69,7 +69,7 @@ def train_from_dataframe(df, random_state=42, slope_weight=3.0):
     X[:, 0] *= float(slope_weight)
 
     # Split
-    train_idx, test_idx = group_stratified_split(y, groups_all, test_size=0.25, random_state=random_state)
+    train_idx, test_idx = group_stratified_split(y, groups_all, test_size=0.2, random_state=random_state)
     X_train, X_test = X[train_idx], X[test_idx]
     y_train, y_test = y[train_idx], y[test_idx]
     groups_train = groups_all[train_idx]
