@@ -11,7 +11,7 @@ from viz import cef_figure, efficiencies_figure, capacities_figure
 from utils import canonicalize_columns
 import joblib, os
 from train_cef_model import load_excel_features, train_from_dataframe, save_model
-
+SLOPE_WEIGHT = 3.0  # must match the value used in training
 st.set_page_config(page_title="Battery Health Prediction - CEF Analysis", page_icon="🔋", layout="wide")
 st.title("🔋 Battery Health Prediction - CEF Analysis")
 st.markdown("Upload raw cycler data for full processing or upload an already processed dataset to compute CEF statistics and plots")
@@ -27,7 +27,11 @@ remove_first_row = st.sidebar.checkbox(
     "Remove First Row (Conditioning Cycle)", value=True,
     help="Applies only to raw cycler Excel processing"
 )
-
+SLOPE_WEIGHT = st.sidebar.number_input(
+    "CEF slope weight",
+    min_value=0.1, max_value=20.0, value=3.0, step=0.1,
+    help="Multiply cef_slope by this factor before scaling and modeling. Use the same value for training and inference."
+)
 # -------- Persistent model load / upload --------
 MODEL_PATH_DEFAULT = "models/cef_gb_model.joblib"
 model = None
@@ -63,7 +67,6 @@ def compute_derivables(df: pd.DataFrame):
         df = df.reset_index(drop=True)
         df.insert(0, "Cycle_Number", range(1, len(df)+1))
     return df
-
 def _features_from_stats(stats):
     slope = stats.get("slope")
     rng = stats.get("range")
@@ -71,7 +74,9 @@ def _features_from_stats(stats):
     var = (std ** 2) if std is not None else None
     if None in (slope, rng, std, var):
         return None
-    return np.array([[slope, rng, std, var]], dtype=float)
+    arr = np.array([[slope, rng, std, var]], dtype=float)
+    arr[:, 0] *= float(SLOPE_WEIGHT)  # reweight slope
+    return arr
 
 uploaded_files = st.file_uploader(
     "Upload files",
@@ -315,7 +320,7 @@ with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False)
 
             if st.button("Train model", type="primary"):
                 with st.spinner("Training with grouped CV…"):
-                    res = train_from_dataframe(df_train, random_state=42)
+                    res = train_from_dataframe(df_train, random_state=42, slope_weight=SLOPE_WEIGHT)
                 st.success("Training complete")
                 st.write("Model parameters:", res["best_params"])
                 if res["cv_f1_mean"] is not None:
