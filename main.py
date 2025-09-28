@@ -79,12 +79,14 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
+summary_rows = []
+
 if uploaded_files is not None:
     for uploaded_file in uploaded_files:
         try:
             final_dataset = None
 
-            st.write(f"Processing file: {uploaded_file.name}")
+            st.write(f"### Processing file: {uploaded_file.name}")
 
             if mode == "Raw cycler Excel":
                 sheet_name, df_raw = load_excel_first_sheet(uploaded_file)
@@ -93,7 +95,7 @@ if uploaded_files is not None:
                 st.write(f"Dataset shape: {df_raw.shape}")
                 st.dataframe(df_raw.head())
 
-                with st.expander("🧪 Data Preparation (edit, rename, auto-map, and clean)", expanded=True):
+                with st.expander(f"🧪 Data Preparation for {uploaded_file.name} (edit, rename, auto-map, and clean)", expanded=True):
                     st.caption("Edit cells, rename columns, and let the app recognize common aliases before processing.")
                     editable = st.data_editor(df_raw, num_rows="dynamic", use_container_width=True)
 
@@ -101,7 +103,7 @@ if uploaded_files is not None:
                     df_for_next = editable.copy()
                     rename_map = {}
                     for col in editable.columns:
-                        new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_raw_{col}{uploaded_file.name}")
+                        new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_raw_{col}_{uploaded_file.name}")
                         if new and new != col:
                             rename_map[col] = new
                     if rename_map:
@@ -129,14 +131,14 @@ if uploaded_files is not None:
                 df_loaded, fmt = _read_any(uploaded_file)
                 st.success(f"Processed dataset loaded ({fmt}).")
 
-                with st.expander("🧪 Data Preparation (edit, rename, auto-map, compute missing fields)", expanded=True):
+                with st.expander(f"🧪 Data Preparation for {uploaded_file.name} (edit, rename, auto-map, compute missing fields)", expanded=True):
                     editable = st.data_editor(df_loaded, num_rows="dynamic", use_container_width=True)
 
                     # Rename Columns
                     df_for_next = editable.copy()
                     rename_map = {}
                     for col in editable.columns:
-                        new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_proc_{col}{uploaded_file.name}")
+                        new = st.text_input(f"Rename '{col}' to:", value=col, key=f"rename_proc_{col}_{uploaded_file.name}")
                         if new and new != col:
                             rename_map[col] = new
                     if rename_map:
@@ -160,19 +162,17 @@ if uploaded_files is not None:
             if final_dataset is None or final_dataset.empty:
                 st.warning("No valid rows available for analysis after preparation. Please adjust the data and try again.")
             else:
-                st.subheader("🔧 Data Preview For Analysis")
+                st.subheader(f"🔧 Data Preview For Analysis: {uploaded_file.name}")
                 st.write(f"Final dataset shape: {final_dataset.shape}")
                 st.dataframe(final_dataset.head(10))
 
-                # Quick hint for efficiencies visibility
                 missing_eff = [c for c in ["Coulombic_Efficiency","Energy_Efficiency"] if c not in final_dataset.columns]
                 if missing_eff:
                     st.info(f"Efficiency columns missing: {missing_eff}. They are computed when capacity/energy pairs are present.")
 
-                st.subheader("📈 CEF Analysis - First 10 Cycles")
+                st.subheader(f"📈 CEF Analysis - First 10 Cycles: {uploaded_file.name}")
                 stats = first_n_cef_stats(final_dataset, first_n=10)
 
-                # Compute sample variance (ddof=1) from std if available, else direct
                 cef_var = None
                 if stats.get("std") is not None:
                     cef_var = float(stats["std"] ** 2)
@@ -191,14 +191,14 @@ if uploaded_files is not None:
 
                 st.plotly_chart(cef_figure(stats), use_container_width=True)
 
-                st.subheader("📊 Additional Analysis")
+                st.subheader(f"📊 Additional Analysis: {uploaded_file.name}")
                 c1, c2 = st.columns(2)
                 with c1:
                     st.plotly_chart(efficiencies_figure(stats), use_container_width=True)
                 with c2:
                     st.plotly_chart(capacities_figure(stats), use_container_width=True)
 
-                st.subheader("🧪 Condition prediction")
+                st.subheader(f"🧪 Condition prediction: {uploaded_file.name}")
                 if model is None:
                     st.info("Load or train a model to enable predictions.")
                 else:
@@ -227,7 +227,7 @@ if uploaded_files is not None:
                         except Exception as e:
                             st.warning(f"Inference error: {e}")
 
-                st.subheader("💾 Download Results")
+                st.subheader(f"💾 Download Results: {uploaded_file.name}")
                 statistics_df = pd.DataFrame({
                     'Parameter': ['CEF Slope (Linear Regression)', 'CEF Range', 'CEF Standard Deviation', 'CEF Variance'],
                     'Value': [stats['slope'], stats['range'], stats['std'], cef_var],
@@ -243,14 +243,59 @@ if uploaded_files is not None:
                     statistics_df.to_excel(writer, sheet_name='CEF_Statistics', index=False)
                     stats['first_n_df'].to_excel(writer, sheet_name='First_10_Cycles', index=False)
                     final_dataset.to_excel(writer, sheet_name='Complete_Dataset', index=False)
-                st.download_button("📥 Download Complete Analysis (Excel)", output.getvalue(),
-                                   file_name="CEF_Analysis_Results.xlsx",
-                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                st.download_button("📄 Download Dataset (CSV)", final_dataset.to_csv(index=False),
-                                   file_name="processed_battery_data.csv", mime="text/csv")
+                st.download_button(
+                    "📥 Download Complete Analysis (Excel)",
+                    output.getvalue(),
+                    file_name=f"CEF_Analysis_Results_{uploaded_file.name}",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"download_excel_{uploaded_file.name}"
+                )
+                st.download_button(
+                    "📄 Download Dataset (CSV)",
+                    final_dataset.to_csv(index=False),
+                    file_name=f"processed_battery_data_{uploaded_file.name}.csv",
+                    mime="text/csv",
+                    key=f"download_csv_{uploaded_file.name}"
+                )
+
+                summary_rows.append({
+                    "FileName": uploaded_file.name,
+                    "CEF_Slope": stats.get("slope"),
+                    "CEF_Range": stats.get("range"),
+                    "CEF_StdDev": stats.get("std"),
+                    "CEF_Variance": cef_var,
+                    "Prediction": label,
+                    "Degraded_Probability": p
+                })
 
         except Exception as e:
             st.error(f"Error: {str(e)}")
+
+    if summary_rows:
+        summary_df = pd.DataFrame(summary_rows)
+        st.subheader("📋 Summary of Predictions")
+        st.dataframe(summary_df)
+
+        csv_summary = summary_df.to_csv(index=False).encode()
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+            summary_df.to_excel(writer, sheet_name="Summary", index=False)
+        excel_data = excel_buffer.getvalue()
+
+        st.download_button(
+            "Download Summary CSV",
+            csv_summary,
+            file_name="battery_health_summary.csv",
+            mime="text/csv",
+            key="download_summary_csv"
+        )
+        st.download_button(
+            "Download Summary Excel",
+            excel_data,
+            file_name="battery_health_summary.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_summary_excel"
+        )
 else:
     st.info("👆 Upload a file to begin analysis")
 
