@@ -194,7 +194,6 @@ if uploaded_file is not None:
             with c2:
                 st.plotly_chart(capacities_figure(stats), use_container_width=True)
 
-            # --------- Inference using persistent model ---------
             st.subheader("🧪 Condition prediction")
             if model is None:
                 st.info("Load or train a model to enable predictions.")
@@ -205,8 +204,13 @@ if uploaded_file is not None:
                 else:
                     try:
                         proba = getattr(model, "predict_proba", None)
-                        if proba is not None:
-                            p = proba(feats)[0,1]
+                        if proba is not None and hasattr(model, "classes_"):
+                            probs = proba(feats)[0]
+                            if 1 in model.classes_:
+                                pos_idx = list(model.classes_).index(1)
+                            else:
+                                pos_idx = 1 if len(model.classes_) > 1 else 0
+                            p = float(probs[pos_idx])
                             pred = int(p >= 0.5)
                         else:
                             pred = int(model.predict(feats)[0])
@@ -245,6 +249,9 @@ if uploaded_file is not None:
         st.error(f"Error: {str(e)}")
 else:
     st.info("👆 Upload a file to begin analysis")
+
+
+st.subheader("🧠 Train classifier (Excel)")
 with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False):
     st.caption("Excel must have: cell_id, cef_slope, cef_range, cef_std, optional cef_var, label (0=Healthy, 1=Degraded).")
     excel_file = st.file_uploader("Upload labeled Excel", type=["xlsx","xls"], key="train_xlsx")
