@@ -265,15 +265,18 @@ with st.expander("Train Gradient Boosting on labeled CEF stats", expanded=False)
                 with st.spinner("Training with grouped CV…"):
                     res = train_from_dataframe(df_train, random_state=42)
                 st.success("Training complete")
-                st.write("Best params:", res["best_params"])
-                st.write("CV F1 mean/std:", res["cv_f1_mean"], res["cv_f1_std"])
-                st.text("Test report:\n" + res["test_report"])
-                st.write("Test AUC:", res["test_auc"])
+                st.write("Model parameters:", res["best_params"])
+                if res["cv_f1_mean"] is not None:
+                    st.write(f"CV F1 score: {res['cv_f1_mean']:.4f} ± {res['cv_f1_std']:.4f}")
+                st.text("Test set classification report:\n" + res["test_report"])
+                if res["test_auc"]:
+                    st.write(f"Test AUC: {res['test_auc']:.4f}")
                 st.write("Confusion matrix:", res["test_confusion_matrix"])
 
                 os.makedirs("models", exist_ok=True)
                 save_path = save_model(res["model"], path="models/cef_gb_model.joblib")
                 st.success(f"Model saved to {save_path} and will auto-load next time.")
-                model = res["model"]
+                global model
+                model = res["model"]  # activate immediately
         except Exception as e:
             st.error(f"Training error: {e}")
