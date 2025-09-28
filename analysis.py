@@ -40,7 +40,6 @@ def first_n_cef_stats(final_dataset: pd.DataFrame, first_n=10):
     # Drop rows missing essential fields for CEF trend
     core = first[[cyc_col, cef_col]].dropna()
     if len(core) == 0:
-        # Still return the optional columns for plots if any
         out = first.rename(columns={cyc_col: "Cycle_Number", cef_col: "CEF"}) if cef_col in first.columns and cyc_col in first.columns else first
         keep_cols = ["Cycle_Number", "CEF"] + [c for c in opt_cols if c in out.columns]
         result["first_n_df"] = out[keep_cols] if set(keep_cols).issubset(out.columns) else out
@@ -50,9 +49,15 @@ def first_n_cef_stats(final_dataset: pd.DataFrame, first_n=10):
     x_vals = core[cyc_col].to_numpy(dtype=float)
     x = x_vals.reshape(-1, 1)
 
-    # Stats
-    s = safe_stats(y)
-    result.update(s)
+    # Compute descriptive stats with consistent definitions
+    # safe_stats may already compute mean and std, but enforce ddof=1 and range explicitly
+    mean_val = float(np.mean(y)) if y.size else None
+    std_val = float(np.std(y, ddof=1)) if y.size >= 2 else None
+    range_val = float(np.nanmax(y) - np.nanmin(y)) if y.size else None
+
+    result["mean"] = mean_val
+    result["std"] = std_val
+    result["range"] = range_val
 
     # Linear trend if possible
     if len(y) >= 2 and np.unique(x_vals).size >= 2:
@@ -64,15 +69,10 @@ def first_n_cef_stats(final_dataset: pd.DataFrame, first_n=10):
         result["slope"] = None
         result["trend_y"] = None
 
-    # Build output for plotting: include optional efficiency/capacity columns if present
-    # Merge back optional columns aligned on cycle index
+    # Build output for plotting with optional columns
     merged = core.copy()
-    # Bring optional columns from 'first' where available for the same rows
     if opt_cols:
-        merged = merged.merge(
-            first[[cyc_col] + opt_cols],
-            on=cyc_col, how="left", suffixes=("", "")
-        )
+        merged = merged.merge(first[[cyc_col] + opt_cols], on=cyc_col, how="left", suffixes=("", ""))
 
     out = merged.rename(columns={cyc_col: "Cycle_Number", cef_col: "CEF"})
     keep_cols = ["Cycle_Number", "CEF"] + [c for c in ["Coulombic_Efficiency", "Energy_Efficiency", "Charge_Capacity", "Discharge_Capacity"] if c in out.columns]
