@@ -6,3 +6,4 @@ plotly
 xlsxwriter
 openpyxl
 shap
+matplotlib
