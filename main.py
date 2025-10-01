@@ -15,6 +15,7 @@ from train_cef_model import load_excel_features, train_from_dataframe, save_mode
 # NEW: imports for pre-processor
 import zipfile
 import openpyxl
+import tempfile
 
 st.set_page_config(page_title="Battery Health Prediction - CEF Analysis", page_icon="🔋", layout="wide")
 st.title("🔋 Battery Health Prediction - CEF Analysis")
@@ -66,7 +67,7 @@ if uploaded_model is not None:
 # ---------------- Pre-Processor helpers (openpyxl) ----------------
 COLUMNS_TO_DELETE = [3, 9, 10, 11, 12, 13]  # 1-based indices
 NEW_HEADINGS = [
-    "Cycle number",
+    "Cycle_Number",          # canonical to align with processing.ALIAS_MAP
     "Time",
     "Date",
     "Voltage (mV)",
@@ -101,52 +102,22 @@ def _preproc_process_workbook(file_bytes: bytes, filename: str):
         except Exception as e:
             issues.append(f"{filename}: delete col {col} failed: {e}")
 
-    # set new headers
+    # set new headers (canonical)
     for idx, heading in enumerate(NEW_HEADINGS, start=1):
         ws.cell(row=1, column=idx, value=heading)
 
-    # rename sheet to base filename
+    # rename sheet to base filename (respect Excel 31-char limit)
     base = filename.rsplit(".", 1)[0]
-    ws.title = base
+    try:
+        ws.title = base[:31]
+    except Exception:
+        ws.title = "Sheet1"
 
     # serialize
     out = io.BytesIO()
     wb.save(out)
     out.seek(0)
     return out.read(), f"modified_{filename}", issues
-
-def compute_derivables(df: pd.DataFrame):
-    if "Coulombic_Efficiency" not in df.columns and {"Discharge_Capacity","Charge_Capacity"}.issubset(df.columns):
-        with np.errstate(divide='ignore', invalid='ignore'):
-            df["Coulombic_Efficiency"] = np.where(df["Charge_Capacity"]>0,
-                                                  df["Discharge_Capacity"]/df["Charge_Capacity"], np.nan)
-    if "Energy_Efficiency" not in df.columns and {"Discharge_Energy","Charge_Energy"}.issubset(df.columns):
-        with np.errstate(divide='ignore', invalid='ignore'):
-            df["Energy_Efficiency"] = np.where(df["Charge_Energy"]>0,
-                                               df["Discharge_Energy"]/df["Charge_Energy"], np.nan)
-    if "CEF" not in df.columns and {"Coulombic_Efficiency","Energy_Efficiency"}.issubset(df.columns):
-        CE = df["Coulombic_Efficiency"].astype(float)
-        EE = df["Energy_Efficiency"].astype(float)
-        df["CEF"] = 2 / (1 / np.exp(-10*(1-CE)) + 1 / np.exp(-10*(1-EE)))
-    if "Cycle_Number" not in df.columns:
-        df = df.reset_index(drop=True)
-        df.insert(0, "Cycle_Number", range(1, len(df)+1))
-    return df
-
-def _features_from_stats(stats):
-    slope = stats.get("slope"); rng = stats.get("range"); std = stats.get("std")
-    var = (std ** 2) if std is not None else None
-    if None in (slope, rng, std, var):
-        return None
-    arr = np.array([[slope, rng, std, var]], dtype=float)
-    mul = np.array([
-        (1.0 + K_MULT * TARGET_W["cef_slope"]) * float(SLOPE_WEIGHT),
-        (1.0 + K_MULT * TARGET_W["cef_range"]),
-        (1.0 + K_MULT * TARGET_W["cef_std"]),
-        (1.0 + K_MULT * TARGET_W["cef_var"]),
-    ], dtype=float)
-    arr = arr * mul
-    return arr
 
 # ---------------- Page logic ----------------
 
@@ -155,7 +126,6 @@ if mode == "Pre-Processor (Excel)":
     st.caption("Keeps only the 2nd sheet, deletes columns [3, 9, 10, 11, 12, 13], rewrites headers, and renames the sheet to the filename.")
     uploaded_files = st.file_uploader("Upload .xlsx files", type=["xlsx"], accept_multiple_files=True)
 
-    # continue into processing
     auto_continue = st.checkbox("Send pre-processed files to Raw Processing automatically", value=True)
 
     if st.button("Run Pre-Processor") and uploaded_files:
@@ -198,14 +168,19 @@ if mode == "Pre-Processor (Excel)":
         if auto_continue:
             st.success("Sending pre-processed files to Raw Processing…")
 
-            class InMemUpload(io.BytesIO):
-                def __init__(self, data, name):
-                    super().__init__(data)
+            # SpooledTemporaryFile wrapper to mimic uploaded files
+            class TempUpload:
+                def __init__(self, data: bytes, name: str):
+                    self._fh = tempfile.SpooledTemporaryFile(max_size=10_000_000, mode="w+b", suffix=".xlsx")
+                    self._fh.write(data); self._fh.seek(0)
                     self.name = name
+                def read(self, *args, **kwargs):
+                    return self._fh.read(*args, **kwargs)
+                def seek(self, *args, **kwargs):
+                    return self._fh.seek(*args, **kwargs)
 
-            forwarded = [InMemUpload(b, n) for n, b in modified]
+            forwarded = [TempUpload(b, n) for n, b in modified]
             st.session_state["_forwarded_preproc_files"] = forwarded
-            # fall through to existing flows (no st.stop())
         else:
             st.stop()
 
@@ -261,7 +236,7 @@ if uploaded_files is not None:
                     required = ["Time","Date","Current (mA)","Capacity (mAh)","Energy (mWh)"]
                     can_process = all(k in df_for_next.columns for k in required)
                     if not can_process:
-                        missing = [k for k in df_for_next.columns if k not in df_for_next.columns]  # benign placeholder
+                        missing = [k for k in required if k not in df_for_next.columns]
                         st.error(f"Missing required columns for raw processing: {missing}")
                     else:
                         with st.spinner("Processing raw data..."):
