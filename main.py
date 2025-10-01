@@ -150,10 +150,16 @@ def _features_from_stats(stats):
 
 # ---------------- Page logic ----------------
 
+# ... keep imports and helpers as in previous version ...
+
 if mode == "Pre-Processor (Excel)":
     st.subheader("Pre-Processor: Excel structural cleanup")
     st.caption("Keeps only the 2nd sheet, deletes columns [3, 9, 10, 11, 12, 13], rewrites headers, and renames the sheet to the filename.")
     uploaded_files = st.file_uploader("Upload .xlsx files", type=["xlsx"], accept_multiple_files=True)
+
+    # NEW control: continue into processing
+    auto_continue = st.checkbox("Send pre-processed files to Raw Processing automatically", value=True)
+
     if st.button("Run Pre-Processor") and uploaded_files:
         modified = []
         report = []
@@ -167,39 +173,67 @@ if mode == "Pre-Processor (Excel)":
             except Exception as e:
                 report.append(f"{uf.name}: unexpected error: {e}")
 
-        if modified:
-            if len(modified) == 1:
-                name, data = modified[0]
-                st.download_button(
-                    f"Download {name}",
-                    data=data,
-                    file_name=name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
-            else:
-                buf = io.BytesIO()
-                with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                    for name, data in modified:
-                        zf.writestr(name, data)
-                buf.seek(0)
-                st.download_button(
-                    "Download all (ZIP)",
-                    data=buf,
-                    file_name="modified_excels.zip",
-                    mime="application/zip",
-                    use_container_width=True,
-                )
-            st.success("Pre-processing complete.")
-        else:
-            st.info("No files produced. Check the report below.")
-
+        # Show report
         if report:
             st.markdown("#### Report")
             for line in report:
                 st.write("-", line)
 
-    st.stop()  # Do not render the rest of the app while in pre-processor mode
+        if not modified:
+            st.info("No files produced.")
+            st.stop()
+
+        # Offer download as before
+        with st.expander("Download pre-processed files (optional)", expanded=False):
+            if len(modified) == 1:
+                name, data = modified[0]
+                st.download_button(
+                    f"Download {name}", data=data, file_name=name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                buf = io.BytesIO()
+                import zipfile
+                with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    for name, data in modified:
+                        zf.writestr(name, data)
+                buf.seek(0)
+                st.download_button("Download all (ZIP)", data=buf, file_name="modified_excels.zip", mime="application/zip")
+
+        # NEW: feed forward into Raw pipeline in-memory
+        if auto_continue:
+            st.success("Sending pre-processed files to Raw Processing…")
+
+            # Emulate uploads with in-memory BytesIO objects that have .name attribute
+            class InMemUpload(io.BytesIO):
+                def __init__(self, data, name):
+                    super().__init__(data)
+                    self.name = name
+
+            forwarded = [InMemUpload(b, n) for n, b in modified]
+
+            # Flip the mode for the remainder of the script
+            mode = "Raw cycler Excel"
+
+            # Provide the forwarded list to the existing processing loop by setting a session state var
+            st.session_state["_forwarded_preproc_files"] = forwarded
+
+            # Continue to rest of script without st.stop()
+        else:
+            st.stop()
+
+# ---------------- Existing flows ----------------
+
+# If coming from Pre-Processor, use forwarded files instead of fresh uploader selection
+if "_forwarded_preproc_files" in st.session_state:
+    uploaded_files = st.session_state.pop("_forwarded_preproc_files")
+else:
+    uploaded_files = st.file_uploader(
+        "Upload files",
+        type=(['xlsx','xls'] if mode == "Raw cycler Excel" else ['csv','xlsx','xls']),
+        accept_multiple_files=True
+    )
+
 
 # ---------------- Existing flows (unchanged) ----------------
 
