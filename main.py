@@ -12,6 +12,10 @@ from utils import canonicalize_columns
 import joblib, os
 from train_cef_model import load_excel_features, train_from_dataframe, save_model
 
+# NEW: imports for pre-processor
+import zipfile
+import openpyxl
+
 st.set_page_config(page_title="Battery Health Prediction - CEF Analysis", page_icon="🔋", layout="wide")
 st.title("🔋 Battery Health Prediction - CEF Analysis")
 st.markdown("Upload raw cycler data for full processing or upload an already processed dataset to compute CEF statistics and plots")
@@ -19,11 +23,12 @@ st.markdown("Upload raw cycler data for full processing or upload an already pro
 # Target feature proportions
 TARGET_W = {"cef_slope":0.364803, "cef_std":0.286279, "cef_range":0.216227, "cef_var":0.132692}
 
+# ---------------- Sidebar ----------------
 st.sidebar.header("Mode")
 mode = st.sidebar.radio(
     "Choose input type",
-    ("Raw cycler Excel", "Processed dataset"),
-    help="Raw cycler Excel runs full cleaning and feature engineering. Processed dataset skips to analysis if required columns exist."
+    ("Pre-Processor (Excel)", "Raw cycler Excel", "Processed dataset"),
+    help="Pre-Processor cleans Excel structure only; Raw performs full pipeline; Processed skips to analysis."
 )
 
 remove_first_row = st.sidebar.checkbox(
@@ -58,6 +63,58 @@ if uploaded_model is not None:
     except Exception as e:
         st.sidebar.error(f"Load failed: {e}")
 
+# ---------------- Pre-Processor helpers (openpyxl) ----------------
+COLUMNS_TO_DELETE = [3, 9, 10, 11, 12, 13]  # 1-based indices
+NEW_HEADINGS = [
+    "Cycle number",
+    "Time",
+    "Date",
+    "Voltage (mV)",
+    "Current (mA)",
+    "Capacity (mAh)",
+    "Energy (mWh)"
+]
+
+def _preproc_process_workbook(file_bytes: bytes, filename: str):
+    issues = []
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
+    except Exception as e:
+        return None, f"modified_{filename}", [f"{filename}: load error: {e}"]
+
+    sheet_names = wb.sheetnames
+    if len(sheet_names) < 2:
+        return None, f"modified_{filename}", [f"{filename}: not enough sheets; skipped."]
+
+    second_sheet_name = sheet_names[1]
+    ws = wb[second_sheet_name]
+
+    # delete other sheets
+    for sn in list(sheet_names):
+        if sn != second_sheet_name:
+            wb.remove(wb[sn])
+
+    # delete target columns in reverse order
+    for col in sorted(COLUMNS_TO_DELETE, reverse=True):
+        try:
+            ws.delete_cols(col)
+        except Exception as e:
+            issues.append(f"{filename}: delete col {col} failed: {e}")
+
+    # set new headers
+    for idx, heading in enumerate(NEW_HEADINGS, start=1):
+        ws.cell(row=1, column=idx, value=heading)
+
+    # rename sheet to base filename
+    base = filename.rsplit(".", 1)[0]
+    ws.title = base
+
+    # serialize
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out.read(), f"modified_{filename}", issues
+
 def compute_derivables(df: pd.DataFrame):
     if "Coulombic_Efficiency" not in df.columns and {"Discharge_Capacity","Charge_Capacity"}.issubset(df.columns):
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -90,6 +147,61 @@ def _features_from_stats(stats):
     ], dtype=float)
     arr = arr * mul
     return arr
+
+# ---------------- Page logic ----------------
+
+if mode == "Pre-Processor (Excel)":
+    st.subheader("Pre-Processor: Excel structural cleanup")
+    st.caption("Keeps only the 2nd sheet, deletes columns [3, 9, 10, 11, 12, 13], rewrites headers, and renames the sheet to the filename.")
+    uploaded_files = st.file_uploader("Upload .xlsx files", type=["xlsx"], accept_multiple_files=True)
+    if st.button("Run Pre-Processor") and uploaded_files:
+        modified = []
+        report = []
+        for uf in uploaded_files:
+            try:
+                content = uf.read(); uf.seek(0)
+                out_bytes, out_name, issues = _preproc_process_workbook(content, uf.name)
+                report.extend(issues or [])
+                if out_bytes is not None:
+                    modified.append((out_name, out_bytes))
+            except Exception as e:
+                report.append(f"{uf.name}: unexpected error: {e}")
+
+        if modified:
+            if len(modified) == 1:
+                name, data = modified[0]
+                st.download_button(
+                    f"Download {name}",
+                    data=data,
+                    file_name=name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            else:
+                buf = io.BytesIO()
+                with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    for name, data in modified:
+                        zf.writestr(name, data)
+                buf.seek(0)
+                st.download_button(
+                    "Download all (ZIP)",
+                    data=buf,
+                    file_name="modified_excels.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                )
+            st.success("Pre-processing complete.")
+        else:
+            st.info("No files produced. Check the report below.")
+
+        if report:
+            st.markdown("#### Report")
+            for line in report:
+                st.write("-", line)
+
+    st.stop()  # Do not render the rest of the app while in pre-processor mode
+
+# ---------------- Existing flows (unchanged) ----------------
 
 uploaded_files = st.file_uploader(
     "Upload files",
