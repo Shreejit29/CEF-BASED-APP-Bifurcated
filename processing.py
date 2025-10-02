@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-from io import BytesIO
 from utils import time_to_decimal_hours, canonicalize_columns
 
 # Canonical raw schema as used by build_final_dataset
@@ -31,32 +30,43 @@ ALIAS_MAP = {
 }
 
 def _normalize_units(df: pd.DataFrame) -> pd.DataFrame:
-    # If voltage in V, convert to mV
+    # Convert to numeric first
+    for c in ["Voltage (mV)","Current (mA)","Energy (mWh)","Capacity (mAh)"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Voltage: if looks like Volts, convert to mV
     if "Voltage (mV)" in df.columns:
-        # Heuristic: if values are mostly < 10, assume it's V and convert
-        s = pd.to_numeric(df["Voltage (mV)"], errors="coerce")
-        if s.notna().mean() > 0 and s.dropna().abs().median() < 10:
-            df["Voltage (mV)"] = s * 1000.0
-    # If current in A, convert to mA
+        s = df["Voltage (mV)"]
+        if s.notna().any():
+            med = s.dropna().abs().median()
+            if pd.notna(med) and med < 10:
+                df["Voltage (mV)"] = s * 1000.0
+
+    # Current: if likely Amps, convert to mA
     if "Current (mA)" in df.columns:
-        s = pd.to_numeric(df["Current (mA)"], errors="coerce")
-        if s.notna().mean() > 0 and s.dropna().abs().median() < 5:  # many cyclers use < 5 A
-            # If median < 5, it could still be mA; check max
-            if s.dropna().abs().max() <= 20:  # likely Amps
+        s = df["Current (mA)"]
+        if s.notna().any():
+            mx = s.dropna().abs().max()
+            if pd.notna(mx) and mx <= 20:  # typical amps range for lab cyclers
                 df["Current (mA)"] = s * 1000.0
-    # If energy in Wh, convert to mWh
+
+    # Energy: if likely Wh, convert to mWh
     if "Energy (mWh)" in df.columns:
-        s = pd.to_numeric(df["Energy (mWh)"], errors="coerce")
-        if s.notna().mean() > 0 and s.dropna().abs().median() < 10:  # small Wh typical
-            # If values like 0.1..5, may be Wh; convert to mWh
-            if s.dropna().abs().max() < 50:
+        s = df["Energy (mWh)"]
+        if s.notna().any():
+            mx = s.dropna().abs().max()
+            if pd.notna(mx) and mx < 50:
                 df["Energy (mWh)"] = s * 1000.0
-    # If capacity in Ah, convert to mAh
+
+    # Capacity: if likely Ah, convert to mAh
     if "Capacity (mAh)" in df.columns:
-        s = pd.to_numeric(df["Capacity (mAh)"], errors="coerce")
-        if s.notna().mean() > 0 and s.dropna().abs().median() < 10:
-            if s.dropna().abs().max() < 50:
+        s = df["Capacity (mAh)"]
+        if s.notna().any():
+            mx = s.dropna().abs().max()
+            if pd.notna(mx) and mx < 50:
                 df["Capacity (mAh)"] = s * 1000.0
+
     return df
 
 def load_excel_first_sheet(uploaded_file):
@@ -86,7 +96,7 @@ def build_final_dataset(df_raw: pd.DataFrame, remove_first_row: bool) -> pd.Data
     # Time to hours
     df['Time_Hours'] = df['Time'].apply(time_to_decimal_hours)
 
-    # Trim and coerce numerics used later
+    # Coerce numerics
     for c in ['Voltage (mV)','Current (mA)','Capacity (mAh)','Energy (mWh)']:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors='coerce')
@@ -99,7 +109,7 @@ def build_final_dataset(df_raw: pd.DataFrame, remove_first_row: bool) -> pd.Data
     columns_order = [c for c in columns_order if c in df_cleaned.columns]
     df_final = df_cleaned[columns_order]
 
-    # Remove pure rest rows (zero or near-zero current)
+    # Remove rest rows
     df_final = df_final[~df_final['Current (mA)'].abs().lt(1e-6)].reset_index(drop=True)
 
     # Determine phase boundaries by sign changes
@@ -107,32 +117,31 @@ def build_final_dataset(df_raw: pd.DataFrame, remove_first_row: bool) -> pd.Data
     sign_change = sign.ne(sign.shift(1))
     boundary_idx = [i-1 for i, ch in enumerate(sign_change) if ch and i > 0]
 
-    # End discharge at file end if last segment is discharge
+    # If last segment is discharge, mark the end
     if len(df_final) and (df_final.iloc[-1]['Current (mA)'] < 0):
         boundary_idx.append(len(df_final)-1)
 
     if len(boundary_idx) == 0:
-        # Return structured empty with all expected cols
-        empty = pd.DataFrame(columns=['Sr. No.','Time_Hours','Voltage (mV)','Current (mA)',
-                                      'Capacity (mAh)','Energy (mWh)','Charge_Capacity','Discharge_Capacity',
-                                      'Charge_Energy','Discharge_Energy','Coulombic_Efficiency','Energy_Efficiency','CEF','Cycle_Number'])
-        return empty
+        cols = ['Sr. No.','Time_Hours','Voltage (mV)','Current (mA)',
+                'Capacity (mAh)','Energy (mWh)','Charge_Capacity','Discharge_Capacity',
+                'Charge_Energy','Discharge_Energy','Coulombic_Efficiency','Energy_Efficiency','CEF','Cycle_Number']
+        return pd.DataFrame(columns=cols)
 
-    # Phase endpoints rows
+    # Take rows at phase endpoints
     final_dataset = df_final.iloc[boundary_idx].copy().reset_index(drop=True)
     final_dataset['Sr. No.'] = range(1, len(final_dataset)+1)
 
-    # Split signed totals into charge/discharge
+    # Split totals by phase sign
     final_dataset['Charge_Capacity'] = np.where(final_dataset['Current (mA)'] > 0, final_dataset['Capacity (mAh)'], 0.0)
     final_dataset['Discharge_Capacity'] = np.where(final_dataset['Current (mA)'] < 0, final_dataset['Capacity (mAh)'], 0.0)
     final_dataset['Charge_Energy'] = np.where(final_dataset['Current (mA)'] > 0, final_dataset['Energy (mWh)'], 0.0)
     final_dataset['Discharge_Energy'] = np.where(final_dataset['Current (mA)'] < 0, final_dataset['Energy (mWh)'], 0.0)
 
-    # Align discharge with next row (pairing with prior charge)
+    # Align discharge to next row (pair with prior charge)
     final_dataset['Discharge_Capacity'] = final_dataset['Discharge_Capacity'].shift(-1).fillna(0.0)
     final_dataset['Discharge_Energy'] = final_dataset['Discharge_Energy'].shift(-1).fillna(0.0)
 
-    # Keep rows where both charge and discharge are positive
+    # Keep only paired rows
     mask = (final_dataset['Charge_Capacity'] > 0) & (final_dataset['Discharge_Capacity'] > 0) & \
            (final_dataset['Charge_Energy'] > 0) & (final_dataset['Discharge_Energy'] > 0)
     final_dataset = final_dataset[mask].reset_index(drop=True)
@@ -215,7 +224,7 @@ def validate_processed_dataframe(df_in: pd.DataFrame):
     if "CEF" not in df.columns and {"Coulombic_Efficiency", "Energy_Efficiency"}.issubset(df.columns):
         CE = df["Coulombic_Efficiency"].astype(float)
         EE = df["Energy_Efficiency"].astype(float)
-        df["CEF"] = 2 / (1 / np.exp(-10 * (1 - CE)) + 1 / np.exp(-10 * (1 - EE))]
+        df["CEF"] = 2 / (1 / np.exp(-10 * (1 - CE)) + 1 / np.exp(-10 * (1 - EE)))
         notes.append("CEF computed from CE and EE.")
 
     # Validate coverage
