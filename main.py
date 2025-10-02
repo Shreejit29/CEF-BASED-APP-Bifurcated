@@ -12,11 +12,6 @@ from utils import canonicalize_columns
 import joblib, os
 from train_cef_model import load_excel_features, train_from_dataframe, save_model
 
-# NEW: imports for pre-processor
-import zipfile
-import openpyxl
-import tempfile
-
 st.set_page_config(page_title="Battery Health Prediction - CEF Analysis", page_icon="🔋", layout="wide")
 st.title("🔋 Battery Health Prediction - CEF Analysis")
 st.markdown("Upload raw cycler data for full processing or upload an already processed dataset to compute CEF statistics and plots")
@@ -28,8 +23,8 @@ TARGET_W = {"cef_slope":0.364803, "cef_std":0.286279, "cef_range":0.216227, "cef
 st.sidebar.header("Mode")
 mode = st.sidebar.radio(
     "Choose input type",
-    ("Pre-Processor (Excel)", "Raw cycler Excel", "Processed dataset"),
-    help="Pre-Processor cleans Excel structure only; Raw performs full pipeline; Processed skips to analysis."
+    ("Raw cycler Excel", "Processed dataset"),
+    help="Raw cycler Excel runs full cleaning and feature engineering. Processed dataset skips to analysis if required columns exist."
 )
 
 remove_first_row = st.sidebar.checkbox(
@@ -64,137 +59,45 @@ if uploaded_model is not None:
     except Exception as e:
         st.sidebar.error(f"Load failed: {e}")
 
-# ---------------- Pre-Processor helpers (openpyxl) ----------------
-COLUMNS_TO_DELETE = [3, 9, 10, 11, 12, 13]  # 1-based indices
-NEW_HEADINGS = [
-    "Cycle_Number",          # canonical to align with processing.ALIAS_MAP
-    "Time",
-    "Date",
-    "Voltage (mV)",
-    "Current (mA)",
-    "Capacity (mAh)",
-    "Energy (mWh)"
-]
+# ---------------- Uploader ----------------
+uploaded_files = st.file_uploader(
+    "Upload files",
+    type=(['xlsx','xls'] if mode == "Raw cycler Excel" else ['csv','xlsx','xls']),
+    accept_multiple_files=True
+)
 
-def _preproc_process_workbook(file_bytes: bytes, filename: str):
-    issues = []
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
-    except Exception as e:
-        return None, f"modified_{filename}", [f"{filename}: load error: {e}"]
+def compute_derivables(df: pd.DataFrame):
+    if "Coulombic_Efficiency" not in df.columns and {"Discharge_Capacity","Charge_Capacity"}.issubset(df.columns):
+        with np.errstate(divide='ignore', invalid='ignore'):
+            df["Coulombic_Efficiency"] = np.where(df["Charge_Capacity"]>0,
+                                                  df["Discharge_Capacity"]/df["Charge_Capacity"], np.nan)
+    if "Energy_Efficiency" not in df.columns and {"Discharge_Energy","Charge_Energy"}.issubset(df.columns):
+        with np.errstate(divide='ignore', invalid='ignore'):
+            df["Energy_Efficiency"] = np.where(df["Charge_Energy"]>0,
+                                               df["Discharge_Energy"]/df["Charge_Energy"], np.nan)
+    if "CEF" not in df.columns and {"Coulombic_Efficiency","Energy_Efficiency"}.issubset(df.columns):
+        CE = df["Coulombic_Efficiency"].astype(float)
+        EE = df["Energy_Efficiency"].astype(float)
+        df["CEF"] = 2 / (1 / np.exp(-10*(1-CE)) + 1 / np.exp(-10*(1-EE)))
+    if "Cycle_Number" not in df.columns:
+        df = df.reset_index(drop=True)
+        df.insert(0, "Cycle_Number", range(1, len(df)+1))
+    return df
 
-    sheet_names = wb.sheetnames
-    if len(sheet_names) < 2:
-        return None, f"modified_{filename}", [f"{filename}: not enough sheets; skipped."]
-
-    second_sheet_name = sheet_names[1]
-    ws = wb[second_sheet_name]
-
-    # delete other sheets
-    for sn in list(sheet_names):
-        if sn != second_sheet_name:
-            wb.remove(wb[sn])
-
-    # delete target columns in reverse order
-    for col in sorted(COLUMNS_TO_DELETE, reverse=True):
-        try:
-            ws.delete_cols(col)
-        except Exception as e:
-            issues.append(f"{filename}: delete col {col} failed: {e}")
-
-    # set new headers (canonical)
-    for idx, heading in enumerate(NEW_HEADINGS, start=1):
-        ws.cell(row=1, column=idx, value=heading)
-
-    # rename sheet to base filename (respect Excel 31-char limit)
-    base = filename.rsplit(".", 1)[0]
-    try:
-        ws.title = base[:31]
-    except Exception:
-        ws.title = "Sheet1"
-
-    # serialize
-    out = io.BytesIO()
-    wb.save(out)
-    out.seek(0)
-    return out.read(), f"modified_{filename}", issues
-
-# ---------------- Page logic ----------------
-
-if mode == "Pre-Processor (Excel)":
-    st.subheader("Pre-Processor: Excel structural cleanup")
-    st.caption("Keeps only the 2nd sheet, deletes columns [3, 9, 10, 11, 12, 13], rewrites headers, and renames the sheet to the filename.")
-    uploaded_files = st.file_uploader("Upload .xlsx files", type=["xlsx"], accept_multiple_files=True)
-
-    auto_continue = st.checkbox("Send pre-processed files to Raw Processing automatically", value=True)
-
-    if st.button("Run Pre-Processor") and uploaded_files:
-        modified = []
-        report = []
-        for uf in uploaded_files:
-            try:
-                content = uf.read(); uf.seek(0)
-                out_bytes, out_name, issues = _preproc_process_workbook(content, uf.name)
-                report.extend(issues or [])
-                if out_bytes is not None:
-                    modified.append((out_name, out_bytes))
-            except Exception as e:
-                report.append(f"{uf.name}: unexpected error: {e}")
-
-        if report:
-            st.markdown("#### Report")
-            for line in report:
-                st.write("-", line)
-
-        if not modified:
-            st.info("No files produced.")
-            st.stop()
-
-        with st.expander("Download pre-processed files (optional)", expanded=False):
-            if len(modified) == 1:
-                name, data = modified[0]
-                st.download_button(
-                    f"Download {name}", data=data, file_name=name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            else:
-                buf = io.BytesIO()
-                with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                    for name, data in modified:
-                        zf.writestr(name, data)
-                buf.seek(0)
-                st.download_button("Download all (ZIP)", data=buf, file_name="modified_excels.zip", mime="application/zip")
-
-        if auto_continue:
-            st.success("Sending pre-processed files to Raw Processing…")
-
-            # SpooledTemporaryFile wrapper to mimic uploaded files
-            class TempUpload:
-                def __init__(self, data: bytes, name: str):
-                    self._fh = tempfile.SpooledTemporaryFile(max_size=10_000_000, mode="w+b", suffix=".xlsx")
-                    self._fh.write(data); self._fh.seek(0)
-                    self.name = name
-                def read(self, *args, **kwargs):
-                    return self._fh.read(*args, **kwargs)
-                def seek(self, *args, **kwargs):
-                    return self._fh.seek(*args, **kwargs)
-
-            forwarded = [TempUpload(b, n) for n, b in modified]
-            st.session_state["_forwarded_preproc_files"] = forwarded
-        else:
-            st.stop()
-
-# ---------------- Existing flows ----------------
-
-# Use forwarded files if present; otherwise ask user
-if "_forwarded_preproc_files" in st.session_state:
-    uploaded_files = st.session_state.pop("_forwarded_preproc_files")
-else:
-    uploaded_files = st.file_uploader(
-        "Upload files",
-        type=(['xlsx','xls'] if mode == "Raw cycler Excel" else ['csv','xlsx','xls']),
-        accept_multiple_files=True
-    )
+def _features_from_stats(stats):
+    slope = stats.get("slope"); rng = stats.get("range"); std = stats.get("std")
+    var = (std ** 2) if std is not None else None
+    if None in (slope, rng, std, var):
+        return None
+    arr = np.array([[slope, rng, std, var]], dtype=float)
+    mul = np.array([
+        (1.0 + K_MULT * TARGET_W["cef_slope"]) * float(SLOPE_WEIGHT),
+        (1.0 + K_MULT * TARGET_W["cef_range"]),
+        (1.0 + K_MULT * TARGET_W["cef_std"]),
+        (1.0 + K_MULT * TARGET_W["cef_var"]),
+    ], dtype=float)
+    arr = arr * mul
+    return arr
 
 summary_rows = []
 
