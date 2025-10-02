@@ -59,12 +59,16 @@ if uploaded_model is not None:
     except Exception as e:
         st.sidebar.error(f"Load failed: {e}")
 
-# ---------------- Uploader ----------------
-uploaded_files = st.file_uploader(
-    "Upload files",
-    type=(['xlsx','xls'] if mode == "Raw cycler Excel" else ['csv','xlsx','xls']),
-    accept_multiple_files=True
-)
+# ---------------- Uploader with preprocessor handoff ----------------
+if "_forwarded_preproc_files" in st.session_state and mode == "Raw cycler Excel":
+    uploaded_files = st.session_state.pop("_forwarded_preproc_files")
+    st.info("Using files forwarded from Pre-Processor.")
+else:
+    uploaded_files = st.file_uploader(
+        "Upload files",
+        type=(['xlsx','xls'] if mode == "Raw cycler Excel" else ['csv','xlsx','xls']),
+        accept_multiple_files=True
+    )
 
 def compute_derivables(df: pd.DataFrame):
     if "Coulombic_Efficiency" not in df.columns and {"Discharge_Capacity","Charge_Capacity"}.issubset(df.columns):
