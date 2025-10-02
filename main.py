@@ -23,8 +23,8 @@ TARGET_W = {"cef_slope":0.364803, "cef_std":0.286279, "cef_range":0.216227, "cef
 st.sidebar.header("Mode")
 mode = st.sidebar.radio(
     "Choose input type",
-    ("Raw cycler Excel", "Processed dataset"),
-    help="Raw cycler Excel runs full cleaning and feature engineering. Processed dataset skips to analysis if required columns exist."
+    ("Pre-Processor (Excel)", "Raw cycler Excel", "Processed dataset"),
+    help="Pre-Processor cleans Excel structure; Raw performs full pipeline; Processed skips to analysis."
 )
 
 remove_first_row = st.sidebar.checkbox(
@@ -59,7 +59,98 @@ if uploaded_model is not None:
     except Exception as e:
         st.sidebar.error(f"Load failed: {e}")
 
-# ---------------- Uploader with preprocessor handoff ----------------
+# ---------- Inline Pre-Processor ----------
+if mode == "Pre-Processor (Excel)":
+    import openpyxl, zipfile, tempfile
+
+    st.subheader("🛠️ Pre-Processor")
+    st.caption("Keeps only the 2nd sheet, deletes columns [3,9,10,11,12,13], writes canonical headers, renames sheet to filename, and can forward to Raw.")
+
+    uploaded_pp = st.file_uploader("Upload .xlsx files for pre-processing", type=["xlsx"], accept_multiple_files=True)
+    auto_continue = st.checkbox("Send output to Raw Processing automatically", value=True, key="pp_autocont")
+
+    NEW_HEADINGS = ["Cycle_Number","Time","Date","Voltage (mV)","Current (mA)","Capacity (mAh)","Energy (mWh)"]
+    COLUMNS_TO_DELETE = [3, 9, 10, 11, 12, 13]
+
+    def _pp_process(b: bytes, name: str):
+        issues = []
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(b))
+        except Exception as e:
+            return None, f"modified_{name}", [f"{name}: load error: {e}"]
+        names = wb.sheetnames
+        if len(names) < 2:
+            return None, f"modified_{name}", [f"{name}: not enough sheets; skipped."]
+        ws = wb[names[1]]
+        for sn in list(names):
+            if sn != names[1]:
+                wb.remove(wb[sn])
+        for col in sorted(COLUMNS_TO_DELETE, reverse=True):
+            try:
+                ws.delete_cols(col)
+            except Exception as e:
+                issues.append(f"{name}: delete col {col} failed: {e}")
+        for i, h in enumerate(NEW_HEADINGS, 1):
+            ws.cell(row=1, column=i, value=h)
+        base = name.rsplit(".", 1)[0]
+        try:
+            ws.title = base[:31]
+        except Exception:
+            ws.title = "Sheet1"
+        out = io.BytesIO(); wb.save(out); out.seek(0)
+        return out.read(), f"modified_{name}", issues
+
+    if st.button("Run Pre-Processor", type="primary") and uploaded_pp:
+        modified, report = [], []
+        for f in uploaded_pp:
+            try:
+                b = f.read(); f.seek(0)
+                out_b, out_n, issues = _pp_process(b, f.name)
+                report.extend(issues or [])
+                if out_b is not None:
+                    modified.append((out_n, out_b))
+            except Exception as e:
+                report.append(f"{f.name}: unexpected error: {e}")
+
+        if not modified:
+            st.warning("No files produced.")
+        else:
+            with st.expander("Download pre-processed files (optional)", expanded=False):
+                if len(modified) == 1:
+                    nm, data = modified[0]
+                    st.download_button(f"Download {nm}", data, nm,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                else:
+                    buf = io.BytesIO()
+                    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                        for nm, data in modified:
+                            zf.writestr(nm, data)
+                    buf.seek(0)
+                    st.download_button("Download all (ZIP)", buf, "modified_excels.zip", "application/zip")
+
+            if auto_continue:
+                class TempUpload:
+                    def __init__(self, data: bytes, name: str):
+                        self._fh = tempfile.SpooledTemporaryFile(max_size=10_000_000, mode="w+b", suffix=".xlsx")
+                        self._fh.write(data); self._fh.seek(0)
+                        self.name = name
+                    def read(self, *a, **k): return self._fh.read(*a, **k)
+                    def seek(self, *a, **k): return self._fh.seek(*a, **k)
+                    def tell(self, *a, **k): return self._fh.tell(*a, **k)
+                    def readable(self): return True
+                    def seekable(self): return True
+                    def close(self): return self._fh.close()
+
+                st.session_state["_forwarded_preproc_files"] = [TempUpload(b, n) for n, b in modified]
+                st.success("Forwarded to Raw. Switch Mode to ‘Raw cycler Excel’ to continue.")
+        if report:
+            st.markdown("#### Pre-Processor Report")
+            for r in report:
+                st.write("-", r)
+
+        st.stop()
+
+# ---------------- Uploader (consumes forwarded) ----------------
 if "_forwarded_preproc_files" in st.session_state and mode == "Raw cycler Excel":
     uploaded_files = st.session_state.pop("_forwarded_preproc_files")
     st.info("Using files forwarded from Pre-Processor.")
