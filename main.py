@@ -1,4 +1,4 @@
-# main.py  (PHASE I + PHASE II – CLEAN)
+# main.py  (PHASE I + PHASE II + PHASE III – CLEAN)
 
 import streamlit as st
 import io
@@ -30,18 +30,45 @@ def extract_early_window(df_cycles: pd.DataFrame, n_cycles: int) -> pd.DataFrame
     return df_sorted.head(n_cycles).reset_index(drop=True)
 
 # -------------------------------------------------
+# Phase III – EFRS Score Helper
+# -------------------------------------------------
+def compute_efrs_score(early_window_df: pd.DataFrame) -> float:
+    """
+    Phase III – EFRS Score (0–100)
+    Deterministic mapping from early-window CEF.
+    """
+    if early_window_df is None or early_window_df.empty:
+        return np.nan
+
+    if "CEF" not in early_window_df.columns:
+        return np.nan
+
+    cef_values = pd.to_numeric(early_window_df["CEF"], errors="coerce").dropna()
+    if cef_values.empty:
+        return np.nan
+
+    cef_mean = float(cef_values.mean())
+    efrs = 100.0 * cef_mean
+
+    # Bound to [0, 100]
+    efrs = max(0.0, min(100.0, efrs))
+
+    return round(efrs, 2)
+
+# -------------------------------------------------
 # App Config
 # -------------------------------------------------
 st.set_page_config(
-    page_title="EFRS – Phase I & II (CEF Analysis)",
+    page_title="EFRS – Phase I, II & III",
     page_icon="🔋",
     layout="wide"
 )
 
-st.title("🔋 EFRS – Phase I & II")
+st.title("🔋 EFRS – Phase I, II & III")
 st.markdown(
     "**Phase I:** Per-cycle CE, EE, CEF (physics only)  \n"
-    "**Phase II:** Early-window cycle selection (no slopes, no ML)"
+    "**Phase II:** Early-window cycle selection  \n"
+    "**Phase III:** Deterministic EFRS score (0–100)"
 )
 
 # -------------------------------------------------
@@ -163,6 +190,18 @@ if uploaded_files:
                     use_container_width=True
                 )
 
+            # ---------------- PHASE III OUTPUT ----------------
+            efrs_score = compute_efrs_score(early_window_df)
+
+            st.subheader("🎯 Phase III – EFRS Score")
+            if np.isnan(efrs_score):
+                st.warning("EFRS score could not be computed.")
+            else:
+                st.metric(
+                    "Early Failure Risk Score (EFRS)",
+                    f"{efrs_score:.2f} / 100"
+                )
+
             # ---------------- DOWNLOADS ----------------
             st.subheader("💾 Download Results")
 
@@ -174,11 +213,13 @@ if uploaded_files:
                 mime="text/csv"
             )
 
-            early_csv = early_window_df.to_csv(index=False)
+            early_with_score = early_window_df.copy()
+            early_with_score["EFRS"] = efrs_score
+
             st.download_button(
-                "Download early-window dataset (CSV)",
-                early_csv,
-                file_name=f"phase2_early_window_{uploaded_file.name}.csv",
+                "Download early-window dataset + EFRS (CSV)",
+                early_with_score.to_csv(index=False),
+                file_name=f"phase2_phase3_early_window_{uploaded_file.name}.csv",
                 mime="text/csv"
             )
 
@@ -186,11 +227,14 @@ if uploaded_files:
             with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
                 final_dataset.to_excel(writer, sheet_name="Phase_I_Full", index=False)
                 early_window_df.to_excel(writer, sheet_name="Phase_II_Early_Window", index=False)
+                pd.DataFrame(
+                    {"Metric": ["EFRS"], "Value": [efrs_score]}
+                ).to_excel(writer, sheet_name="Phase_III_EFRS", index=False)
 
             st.download_button(
-                "Download Phase I & II (Excel)",
+                "Download Phase I–III (Excel)",
                 excel_buffer.getvalue(),
-                file_name=f"efrs_phase1_phase2_{uploaded_file.name}.xlsx",
+                file_name=f"efrs_phase1_phase2_phase3_{uploaded_file.name}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
@@ -198,4 +242,4 @@ if uploaded_files:
             st.error(f"Error processing file: {e}")
 
 else:
-    st.info("👆 Upload raw or processed battery data to begin Phase I & II analysis.")
+    st.info("👆 Upload raw or processed battery data to begin EFRS Phase I–III analysis.")
